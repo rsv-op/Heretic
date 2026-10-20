@@ -12,6 +12,8 @@ export interface HereticNativeBridge {
   speak: (text: string) => void;
   triggerMic: () => void;
   triggerFilePicker: () => void;
+  stopSpeaking?: () => void;
+  grantGate?: (key: string, decision: "GRANTED" | "DENIED") => string;
   coreVersion?: () => string;
 }
 
