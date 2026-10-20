@@ -21,8 +21,13 @@ jobs:
         with:
           node-version: '22'
 
-      # The single-file web UI is still the placeholder index.html committed in assets/.
-      # It is replaced once the Vite web UI build lands.
+      - name: Build single-file web UI and copy to Android assets
+        working-directory: webui
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          cp dist/index.html ../public/android/HeretIc/app/src/main/assets/index.html
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
