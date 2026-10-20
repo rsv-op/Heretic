@@ -49,7 +49,10 @@ jobs:
           import sys, re
           lines = open(sys.argv[1], errors="replace").read().splitlines()
           keep = [l for l in lines if re.search(r"^e: |error|What went wrong|Could not|FAILED|Exception|Caused by|^> ", l)]
-          msg = "\n".join(keep[:60]) or "\n".join(lines[-60:])
+          for i, l in enumerate(lines):
+              if re.search(r"issues were found|compile against|minCompileSdk|requires", l):
+                  keep += lines[i:i + 12]
+          msg = "\n".join(keep[:90]) or "\n".join(lines[-60:])
           msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")[:3500]
           print(f"::error title=Gradle build failed::{msg}")
           PY
