@@ -85,9 +85,14 @@ jobs:
       - name: Create GitHub Release with the APK attached
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="apk-run-${{ github.run_number }}"
-          gh release create "$TAG" HeretIc.apk \
+          if ! gh release create "$TAG" HeretIc.apk \
             --title "HeretIc APK (build ${{ github.run_number }})" \
             --notes "Built from commit ${{ github.sha }} by workflow run ${{ github.run_id }}. Debug-signed: allow 'Install unknown apps' on Android to sideload." \
-            --latest
+            --latest 2> release.err; then
+            cat release.err
+            echo "::error title=Release failed::$(tr '\n' ' ' < release.err | cut -c1-900)"
+            exit 1
+          fi
