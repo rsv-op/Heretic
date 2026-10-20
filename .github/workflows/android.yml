@@ -68,3 +68,26 @@ jobs:
           name: HeretIc-unified-apk
           path: HeretIc.apk
           retention-days: 30
+
+  publish-release:
+    name: Publish APK to GitHub Releases
+    needs: build-apk
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: HeretIc-unified-apk
+
+      - name: Create GitHub Release with the APK attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apk-run-${{ github.run_number }}"
+          gh release create "$TAG" HeretIc.apk \
+            --title "HeretIc APK (build ${{ github.run_number }})" \
+            --notes "Built from commit ${{ github.sha }} by workflow run ${{ github.run_id }}. Debug-signed: allow 'Install unknown apps' on Android to sideload." \
+            --latest
