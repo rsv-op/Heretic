@@ -2,6 +2,7 @@ package ai.heretic.app.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -15,6 +16,8 @@ private val Panel = Color(0xFF0E1117)
 private val Chalk = Color(0xFFE9ECF3)
 private val Ash = Color(0xFF8691A4)
 private val Rose = Color(0xFFFF4D6D)
+
+private val HereticTypography = Typography()
 
 private val DarkScheme = darkColorScheme(
     primary = Ember,
