@@ -38,9 +38,21 @@ jobs:
       - name: Run Unit Tests & Assemble APK
         working-directory: public/android/HeretIc
         run: |
-          gradle :app:testDebugUnitTest --no-daemon --stacktrace
-          gradle :app:assembleDebug --no-daemon
+          set -o pipefail
+          (gradle :app:testDebugUnitTest --no-daemon --stacktrace && gradle :app:assembleDebug --no-daemon --stacktrace) 2>&1 | tee "$RUNNER_TEMP/gradle.log"
           cp app/build/outputs/apk/debug/app-debug.apk ../../../HeretIc.apk
+
+      - name: Publish Gradle errors (readable via API)
+        if: failure()
+        run: |
+          python3 - "$RUNNER_TEMP/gradle.log" <<'PY'
+          import sys, re
+          lines = open(sys.argv[1], errors="replace").read().splitlines()
+          keep = [l for l in lines if re.search(r"^e: |error|What went wrong|Could not|FAILED|Exception|Caused by|^> ", l)]
+          msg = "\n".join(keep[:60]) or "\n".join(lines[-60:])
+          msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")[:3500]
+          print(f"::error title=Gradle build failed::{msg}")
+          PY
 
       - name: Upload Downloadable HeretIc.apk Artifact
         uses: actions/upload-artifact@v4
