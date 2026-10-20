@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  This file is GENERATED. Do not edit by hand.
+  The build workflow runs:
+      npm run build            # vite-plugin-singlefile inlines JS + CSS + icons
+      cp dist/index.html public/android/HeretIc/app/src/main/assets/index.html
+  The React command center then boots inside the WebView and talks to Kotlin
+  through window.HereticNative (see ui/WebBridge.kt).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>HeretIc Command Center</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      (function () {
+        var bridge = window.HereticNative;
+        document.getElementById('root').textContent = bridge
+          ? 'HereticNative bridge detected · core ' + bridge.coreVersion()
+          : 'Bridge absent — run the copy step, then rebuild the APK.';
+      })();
+    </script>
+  </body>
+</html>
