@@ -1,5 +1,7 @@
 package ai.heretic.app.ui
 
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import ai.heretic.app.core.ErrorEngine
 import ai.heretic.app.core.HereticCore
@@ -74,19 +76,25 @@ class HereticJsBridge(
         }.toString()
     }
 
+    // JavascriptInterface methods run on a background thread. SpeechRecognizer,
+    // TextToSpeech and permission/file launchers must be used on the main thread.
+    private val main = Handler(Looper.getMainLooper())
+
     @JavascriptInterface
     fun speak(text: String) {
-        if (core.gates.granted("tts.speak")) voice.speak(text) else core.log("gate.blocked", "tts.speak")
+        main.post {
+            if (core.gates.granted("tts.speak")) voice.speak(text) else core.log("gate.blocked", "tts.speak")
+        }
     }
 
     @JavascriptInterface
-    fun stopSpeaking() = voice.stop()
+    fun stopSpeaking() = main.post { voice.stop() }
 
     @JavascriptInterface
-    fun triggerMic() = onRequestMicPermission()
+    fun triggerMic() = main.post { onRequestMicPermission() }
 
     @JavascriptInterface
-    fun triggerFilePicker() = onPickFileRequest()
+    fun triggerFilePicker() = main.post { onPickFileRequest() }
 
     @JavascriptInterface
     fun grantGate(key: String, decision: String): String =

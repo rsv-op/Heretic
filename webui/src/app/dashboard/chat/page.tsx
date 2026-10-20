@@ -103,6 +103,13 @@ export default function ChatPage() {
     if (activeId) void loadThread(activeId);
   }, [activeId, loadThread]);
 
+  /* Spoken replies in the APK are gated natively (tts.speak, silent by default).
+     The toggle above is the operator's consent, so mirror it into the native gate. */
+  useEffect(() => {
+    if (!nativeBridge?.grantGate) return;
+    nativeBridge.grantGate("tts.speak", speakOut ? "GRANTED" : "DENIED");
+  }, [nativeBridge, speakOut]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [thread]);
