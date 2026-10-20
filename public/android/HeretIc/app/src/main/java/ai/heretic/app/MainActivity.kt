@@ -74,10 +74,12 @@ class MainActivity : ComponentActivity() {
                 ) { uri: Uri? ->
                     uri?.let {
                         // Storage Access Framework: exactly one grant, one file.
-                        contentResolver.takePersistableUriPermission(
-                            it,
-                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                        ).orThrowCatching()
+                        runCatching {
+                            contentResolver.takePersistableUriPermission(
+                                it,
+                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                            )
+                        } // not every provider grants persistable access; picking still works
                         emit("heretic-file-picked", resolveFileName(it))
                     }
                 }
@@ -174,5 +176,4 @@ class MainActivity : ComponentActivity() {
         return name
     }
 
-    private fun Result<Unit>.orThrowCatching() = onFailure { /* grant not persistable */ }
 }

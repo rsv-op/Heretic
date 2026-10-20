@@ -1,11 +1,8 @@
 package ai.heretic.app.ml
 
 import android.content.Context
-import com.google.ai.edge.litert.Interpreter
-import com.google.ai.edge.litert.gpu.GpuDelegate
-import java.io.FileInputStream
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
+import com.google.ai.edge.litert.Accelerator
+import com.google.ai.edge.litert.CompiledModel
 
 data class InferenceReport(
     val model: String,
@@ -15,59 +12,56 @@ data class InferenceReport(
 )
 
 /**
+ * On-device inference through the LiteRT 2.x CompiledModel API.
+ *
  * com.google.ai.edge.litert:litert:2.3.0
  * com.google.ai.edge.litert:litert-gpu:2.3.0   (optional GPU acceleration)
  *
- * The delegate is probed exactly once per install and the result cached, so a
- * Mali driver that throws on init never costs more than one failed attempt.
+ * GPU is tried first; if the device or driver refuses it, the model is compiled
+ * for the CPU instead, so a failed GPU probe costs one attempt.
  */
 class LiteRtEngine(private val context: Context) {
 
-    private var interpreter: Interpreter? = null
-    private var gpu: GpuDelegate? = null
+    private var model: CompiledModel? = null
+    private var modelName: String = ""
     private var backend: String = "cpu"
 
-    fun load(assetPath: String): Interpreter {
-        val buffer = mapAsset(assetPath)
-        val options = Interpreter.Options()
-        val delegateAttached = runCatching {
-            val delegate = GpuDelegate(GpuDelegate.Options().apply {
-                setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED)
-            })
-            options.addDelegate(delegate)
-            gpu = delegate
-            true
-        }.getOrElse { false }
-
-        backend = if (delegateAttached) "gpu" else "cpu"
-        if (!delegateAttached) options.setNumThreads(4)
-
-        return Interpreter(buffer, options).also { interpreter = it }
+    /** Loads a .tflite model bundled under app/src/main/assets/models/. */
+    fun load(assetPath: String): CompiledModel {
+        close()
+        val gpu = runCatching {
+            CompiledModel.create(context.assets, assetPath, CompiledModel.Options(Accelerator.GPU), null)
+        }
+        val compiled = gpu.getOrNull() ?: CompiledModel.create(
+            context.assets,
+            assetPath,
+            CompiledModel.Options(Accelerator.CPU),
+            null,
+        )
+        backend = if (gpu.isSuccess) "gpu" else "cpu"
+        modelName = assetPath
+        model = compiled
+        return compiled
     }
 
+    /** Runs one inference. Each input array fills the matching input tensor. */
     fun run(input: Array<FloatArray>): InferenceReport {
-        val it = interpreter ?: error("Interpreter not loaded; call load() first")
-        val out = Array(1) { FloatArray(512) }
+        val m = model ?: error("Model not loaded; call load() first")
+        val inputs = m.createInputBuffers()
+        val outputs = m.createOutputBuffers()
+        input.forEachIndexed { index, data -> inputs[index].writeFloat(data) }
+
         val runtime = Runtime.getRuntime()
         val before = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
         val started = System.nanoTime()
-        it.run(input, out)
+        m.run(inputs, outputs)
         val latency = (System.nanoTime() - started) / 1_000_000
         val after = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
-        return InferenceReport(it.toString(), backend, latency, maxOf(0, after - before))
+        return InferenceReport(modelName, backend, latency, maxOf(0, after - before))
     }
 
     fun close() {
-        interpreter?.close()
-        gpu?.close()
-        interpreter = null
-        gpu = null
-    }
-
-    private fun mapAsset(assetPath: String): MappedByteBuffer {
-        val fd = context.assets.openFd(assetPath)
-        FileInputStream(fd.fileDescriptor).use { stream ->
-            return stream.channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
-        }
+        model?.close()
+        model = null
     }
 }

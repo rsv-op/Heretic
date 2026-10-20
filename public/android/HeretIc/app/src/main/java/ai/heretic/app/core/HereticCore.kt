@@ -49,7 +49,10 @@ class HereticCore(private val context: Context) {
         val normalized = " ${prompt.lowercase()} "
         var best = Intent.UNKNOWN to 0
         for ((intent, keys) in rules) {
-            val score = keys.sumOf { if (normalized.contains(it)) if (it.length > 6) 2 else 1 else 0 }
+            val score: Int = keys.sumOf { key ->
+                val hit: Int = if (normalized.contains(key)) 1 else 0
+                hit * (if (key.length > 6) 2 else 1)
+            }
             if (score > best.second) best = intent to score
         }
         val confidence = if (best.second == 0) 0.31 else minOf(0.97, 0.52 + best.second * 0.09)
