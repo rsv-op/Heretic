@@ -97,7 +97,7 @@ jobs:
           apk = "app/build/outputs/apk/debug/app-debug.apk"
           size = os.path.getsize(apk) if os.path.exists(apk) else 0
           listing = subprocess.run(["unzip", "-l", apk], capture_output=True, text=True).stdout
-          assets = [line.split()[-1] for line in listing.splitlines() if "/assets/" in line]
+          assets = [line.split()[-1] for line in listing.splitlines() if "assets/" in line]
           native = sorted({line.split()[-1].split("/")[1] for line in listing.splitlines() if line.strip().endswith(".so")})
           def note(title, text):
               text = str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", " ")[:900]
