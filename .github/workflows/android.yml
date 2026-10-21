@@ -56,6 +56,29 @@ jobs:
           (gradle :app:testDebugUnitTest --no-daemon --stacktrace && gradle :app:assembleDebug --no-daemon --stacktrace) 2>&1 | tee "$RUNNER_TEMP/gradle.log"
           cp app/build/outputs/apk/debug/app-debug.apk ../../../HeretIc.apk
 
+      - name: Verify packaged web bundle and LiteRT-LM native libs
+        working-directory: public/android/HeretIc
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" > "$RUNNER_TEMP/apk.txt"
+          fail=0
+          for needle in "assets/index.html" "assets/pglite-" "lib/arm64-v8a/liblitertlm" "lib/x86_64/liblitertlm"; do
+            if grep -q "$needle" "$RUNNER_TEMP/apk.txt"; then
+              echo "ok: $needle"
+            else
+              echo "::error title=APK content missing::$needle is not packaged in $APK"
+              fail=1
+            fi
+          done
+          # 53 MB of base64 wasm in the HTML would mean the split regressed.
+          HTML_BYTES=$(unzip -p "$APK" assets/index.html | wc -c)
+          echo "index.html inside the APK: $HTML_BYTES bytes"
+          if [ "$HTML_BYTES" -gt 4000000 ]; then
+            echo "::error title=Web bundle regressed::assets/index.html is $HTML_BYTES bytes; the PGlite runtime is being inlined again"
+            fail=1
+          fi
+          exit $fail
+
       - name: Publish build report (readable via API)
         if: success()
         working-directory: public/android/HeretIc
@@ -81,7 +104,7 @@ jobs:
               print(f"::notice title={title}::{text}")
           note("Unit tests", f"{total} run, {failures} failures, {errors} errors, {skipped} skipped | suites: {', '.join(suites)}")
           note("APK", f"{size} bytes ({size/1048576:.2f} MiB) | native ABIs: {', '.join(native)}")
-          note("APK assets", ", ".join(a.split("assets/")[-1] for a in assets))
+          note("APK assets", ", ".join(a.split("assets/")[-1] for a in assets) or "no asset entries found")
           PY
 
       - name: Publish Gradle errors (readable via API)
