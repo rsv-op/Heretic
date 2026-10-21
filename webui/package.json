@@ -1,0 +1,31 @@
+{
+  "name": "heretic-webui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.11",
+    "@noble/hashes": "1.8.0",
+    "buffer": "6.0.3",
+    "drizzle-orm": "0.45.4",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "22.19.15",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.1.2",
+    "drizzle-kit": "0.31.11",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vite-plugin-singlefile": "2.3.4"
+  }
+}

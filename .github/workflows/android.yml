@@ -1,0 +1,107 @@
+name: Build Unified HeretIc APK
+
+on:
+  push:
+    branches:
+      - main
+      - arena/150cc900-heretic
+      - "arena/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Bundle Web UI & Assemble HeretIc APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build single-file web UI and copy to Android assets
+        working-directory: webui
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          # index.html plus the split PGlite runtime (wasm + data), served by
+          # WebViewAssetLoader from https://appassets.androidplatform.net/assets/
+          rm -f ../public/android/HeretIc/app/src/main/assets/*.js \
+                ../public/android/HeretIc/app/src/main/assets/*.wasm \
+                ../public/android/HeretIc/app/src/main/assets/*.data
+          cp dist/* ../public/android/HeretIc/app/src/main/assets/
+          ls -la ../public/android/HeretIc/app/src/main/assets/
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      - name: Run Unit Tests & Assemble APK
+        working-directory: public/android/HeretIc
+        run: |
+          set -o pipefail
+          (gradle :app:testDebugUnitTest --no-daemon --stacktrace && gradle :app:assembleDebug --no-daemon --stacktrace) 2>&1 | tee "$RUNNER_TEMP/gradle.log"
+          cp app/build/outputs/apk/debug/app-debug.apk ../../../HeretIc.apk
+
+      - name: Publish Gradle errors (readable via API)
+        if: failure()
+        run: |
+          python3 - "$RUNNER_TEMP/gradle.log" <<'PY'
+          import sys, re
+          lines = open(sys.argv[1], errors="replace").read().splitlines()
+          keep = [l for l in lines if re.search(r"^e: |error|What went wrong|Could not|FAILED|Exception|Caused by|^> ", l)]
+          for i, l in enumerate(lines):
+              if re.search(r"issues were found|compile against|minCompileSdk|requires", l):
+                  keep += lines[i:i + 12]
+          msg = "\n".join(keep[:90]) or "\n".join(lines[-60:])
+          msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")[:3500]
+          print(f"::error title=Gradle build failed::{msg}")
+          PY
+
+      - name: Upload Downloadable HeretIc.apk Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeretIc-unified-apk
+          path: HeretIc.apk
+          retention-days: 30
+
+  publish-release:
+    name: Publish APK to GitHub Releases
+    needs: build-apk
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: HeretIc-unified-apk
+
+      - name: Create GitHub Release with the APK attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="apk-run-${{ github.run_number }}"
+          if ! gh release create "$TAG" HeretIc.apk \
+            --title "HeretIc APK (build ${{ github.run_number }})" \
+            --notes "Built from commit ${{ github.sha }} by workflow run ${{ github.run_id }}. Debug-signed: allow 'Install unknown apps' on Android to sideload." \
+            --latest 2> release.err; then
+            cat release.err
+            echo "::error title=Release failed::$(tr '\n' ' ' < release.err | cut -c1-900)"
+            exit 1
+          fi

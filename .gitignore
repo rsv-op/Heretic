@@ -1,0 +1,12 @@
+webui/node_modules/
+webui/dist/
+webui/tsconfig.tsbuildinfo
+
+# Split PGlite runtime: produced by `npm run build` and staged by CI, never committed.
+public/android/HeretIc/app/src/main/assets/*.js
+public/android/HeretIc/app/src/main/assets/*.wasm
+public/android/HeretIc/app/src/main/assets/*.data
+
+public/android/HeretIc/build/
+public/android/HeretIc/app/build/
+public/android/HeretIc/.gradle/
