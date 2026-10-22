@@ -25,18 +25,10 @@ jobs:
           node-version: '22'
 
       - name: Build single-file web UI and copy to Android assets
-        working-directory: webui
-        run: |
-          npm ci
-          npm run typecheck
-          npm run build
-          # index.html plus the split PGlite runtime (wasm + data), served by
-          # WebViewAssetLoader from https://appassets.androidplatform.net/assets/
-          rm -f ../public/android/HeretIc/app/src/main/assets/*.js \
-                ../public/android/HeretIc/app/src/main/assets/*.wasm \
-                ../public/android/HeretIc/app/src/main/assets/*.data
-          cp dist/* ../public/android/HeretIc/app/src/main/assets/
-          ls -la ../public/android/HeretIc/app/src/main/assets/
+        # Same script a local build uses, so CI and local staging cannot drift.
+        # Stages index.html plus the split PGlite runtime (wasm + data) that
+        # WebViewAssetLoader serves from https://appassets.androidplatform.net.
+        run: ./scripts/stage-web.sh
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
