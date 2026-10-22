@@ -286,7 +286,7 @@ export default function SettingsPage() {
           </ul>
           <div className="flex flex-wrap items-center gap-4 border-t border-line bg-abyss/50 px-5 py-4">
             <span className="flex items-center gap-2 font-mono text-[11px] text-ash2">
-              <Droid width={13} height={13} /> ai.heretic.app · versionName 2.3.0-offline · minSdk 26 · targetSdk 35
+              <Droid width={13} height={13} /> ai.heretic.app · versionName 2.3.0-offline · minSdk 26 · targetSdk 36 · compileSdk 36
             </span>
             <span className="flex items-center gap-2 font-mono text-[11px] text-ash2">
               <Gate width={13} height={13} /> audit head {dashboard?.audit.head.slice(0, 10) ?? "genesis"}

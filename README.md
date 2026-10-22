@@ -83,21 +83,38 @@ posted to the main looper before `evaluateJavascript`.
   `webui/src/lib/engines.ts`, and the dashboard's Android build screen has a
   `.litertlm` loader panel wired to `HereticNative.triggerModelPicker()`.
 
+## Decisions recorded in the log
+
+The append-only decision log ships with a baseline of two new ADRs, seeded natively by
+`DecisionSeeds` (written once on first launch by `HereticApplication` through
+`DecisionLogger.seedBaseline()`) and mirrored in `webui/src/lib/seed.ts`:
+
+| Ref | Decision | Reasoning rule |
+| --- | --- | --- |
+| ADR-009 | Serve the web UI through `WebViewAssetLoader` on `https://appassets.androidplatform.net` instead of `file://` | passes (`because` + ≥ 12 words) |
+| ADR-010 | `abiFilters` = `arm64-v8a` + `x86_64`, dropping `armeabi-v7a` | passes (`because` + ≥ 12 words) |
+
+Both entries carry context, the options considered, the choice, the mandatory reasoning
+sentence and the impact, and are covered by `DecisionSeedTest` (JVM) and `DecisionSeedTest`
+in `webui/src/lib/coreTests.ts`. Seeding is idempotent: refs already present are skipped, so
+relaunches never duplicate entries.
+
 ## Build
 
 ```bash
-cd webui
-npm ci && npm run typecheck && npm run build
+# builds webui/, then stages index.html + the split PGlite runtime into
+# public/android/HeretIc/app/src/main/assets (the same script CI runs)
+./scripts/stage-web.sh
 
-# stage the web bundle next to the Android assets
-rm -f ../public/android/HeretIc/app/src/main/assets/*.{js,wasm,data}
-cp dist/* ../public/android/HeretIc/app/src/main/assets/
-
-cd ../public/android/HeretIc
-gradle :app:testDebugUnitTest
-gradle :app:assembleDebug
+cd public/android/HeretIc
+gradle :app:testDebugUnitTest   # works on a bare checkout; needs no web assets
+gradle :app:assembleDebug       # verifyWebAssets fails fast if staging was skipped
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+`:app:assembleDebug` depends on a `verifyWebAssets` task that fails with the exact
+fix if `index.html` references a `pglite-*.js` chunk that was never staged, or if
+no `pglite-*.wasm`/`.data` is present.
 
 CI does exactly this on every push to an `arena/**` branch or `main`, uploads the
 `HeretIc-unified-apk` artifact, and publishes a GitHub Release when `main` builds.
