@@ -169,13 +169,19 @@ class VoicePipelineController(
                     if (initializedPaths != null && initializedPaths != paths) {
                         teardownOrchestrator()
                     }
+                    val slotOk = if (slot == "stt") readiness.sttReady else (readiness.ttsReady && readiness.styleReady)
+                    val detail = if (slot == "stt") readiness.sttMessage else readiness.ttsMessage
                     mutateState {
                         it.copy(
                             isBusy = false,
                             paths = paths,
                             readiness = readiness,
                             isInitialized = orchestrator != null && initializedPaths == paths,
-                            statusMessage = "$label directory configured: ${dir.absolutePath}",
+                            statusMessage = if (slotOk) {
+                                "$label ready (${dir.name}) — $detail"
+                            } else {
+                                "$label imported with missing files — $detail"
+                            },
                         )
                     }
                 },
@@ -187,6 +193,45 @@ class VoicePipelineController(
                             paths = paths,
                             readiness = readiness,
                             statusMessage = "$label folder error: ${err.message}",
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun importModelArchiveUri(uri: Uri, slot: String) {
+        val label = if (slot == "stt") "Parakeet STT" else "Supertonic TTS"
+        mutateState { it.copy(isBusy = true, statusMessage = "Extracting $label .zip bundle...") }
+        scope.launch(Dispatchers.IO) {
+            val result = VoiceModelConfigStore.importModelArchiveDocument(appContext, uri, slot) { progress ->
+                mutateState { s -> s.copy(statusMessage = progress) }
+            }
+            val paths = VoiceModelConfigStore.loadPaths(appContext)
+            val readiness = VoiceModelConfigStore.validate(paths)
+            result.fold(
+                onSuccess = { dir ->
+                    if (initializedPaths != null && initializedPaths != paths) {
+                        teardownOrchestrator()
+                    }
+                    mutateState {
+                        it.copy(
+                            isBusy = false,
+                            paths = paths,
+                            readiness = readiness,
+                            isInitialized = orchestrator != null && initializedPaths == paths,
+                            statusMessage = "$label .zip extracted and verified (${dir.name}).",
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    Log.e(TAG, "$label .zip archive import failed", err)
+                    mutateState {
+                        it.copy(
+                            isBusy = false,
+                            paths = paths,
+                            readiness = readiness,
+                            statusMessage = "$label .zip error: ${err.message}",
                         )
                     }
                 }

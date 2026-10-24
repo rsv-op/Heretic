@@ -13,8 +13,8 @@ android {
         applicationId = "ai.heretic.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "2.5.0-android16-unified-voice"
+        versionCode = 26
+        versionName = "2.6.0-android16-unified-voice"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -72,6 +72,10 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+
+    androidResources {
+        noCompress += listOf("onnx", "gguf", "litertlm")
     }
 
     packaging {

@@ -1,0 +1,87 @@
+name: Package & Publish Voice Pipeline Models
+
+on:
+  push:
+    branches:
+      - main
+      - "arena/**"
+    paths:
+      - "scripts/package-voice-models.sh"
+      - ".github/workflows/package-voice-models.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-voice-models:
+    name: Build & Publish Ready-to-Use Voice Model Bundles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if voice-models-v1 release already has all verified assets
+        id: check_existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view voice-models-v1 --json assets --jq '.assets[].name' > /tmp/existing_assets.txt 2>/dev/null; then
+            if grep -qx "qwen2.5-0.5b-instruct-q4_k_m.gguf" /tmp/existing_assets.txt && \
+               grep -qx "parakeet-tdt-stt-models.zip" /tmp/existing_assets.txt && \
+               grep -qx "supertonic-tts-models.zip" /tmp/existing_assets.txt && \
+               grep -qx "SHA256SUMS.txt" /tmp/existing_assets.txt; then
+              echo "already_published=true" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Voice models already published::Release voice-models-v1 already contains all 4 verified assets."
+              exit 0
+            fi
+          fi
+          echo "already_published=false" >> "$GITHUB_OUTPUT"
+
+      - name: Package & verify GGUF, Parakeet STT, and Supertonic TTS model bundles
+        if: steps.check_existing.outputs.already_published != 'true'
+        run: |
+          chmod +x ./scripts/package-voice-models.sh
+          ./scripts/package-voice-models.sh "$RUNNER_TEMP/voice-models"
+
+      - name: Publish voice-models-v1 GitHub Release
+        if: steps.check_existing.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="voice-models-v1"
+          NOTES=$(cat <<'EOF'
+          Ready-to-use offline model bundles for the **HeretIc Unified Voice Pipeline** (`Voice` tab):
+
+          1. **Slot 1 — `llama.cpp GGUF Model (.gguf)`**
+             - `qwen2.5-0.5b-instruct-q4_k_m.gguf` — Quantized Qwen 2.5 0.5B Instruct (`Q4_K_M`, GGUF v3)
+             - Load via **Pick .gguf File (SAF)**
+
+          2. **Slot 2 — `Parakeet TDT STT` (`parakeet-tdt-stt-models.zip`)**
+             - Contains SHA-256-verified `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `nemo128.onnx`, `vocab.txt`, `silero_vad.onnx`, and `silero_vad_v6.onnx`
+             - Load directly via **Import STT .zip** (no unzipping required) or extract and select via **Pick STT Folder**
+
+          3. **Slot 3 — `Supertonic TTS + Voice Styles` (`supertonic-tts-models.zip`)**
+             - Contains `duration_predictor.onnx`, `text_encoder.onnx`, `vector_estimator.onnx`, `vocoder.onnx`, `tts.json`, `unicode_indexer.json`, and 10 speaker styles (`voice_styles/M1.json`–`M5.json`, `F1.json`–`F5.json`)
+             - Load directly via **Import TTS .zip** (no unzipping required) or extract and select via **Pick TTS Folder**
+          EOF
+          )
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "$RUNNER_TEMP/voice-models/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
+              "$RUNNER_TEMP/voice-models/parakeet-tdt-stt-models.zip" \
+              "$RUNNER_TEMP/voice-models/supertonic-tts-models.zip" \
+              "$RUNNER_TEMP/voice-models/SHA256SUMS.txt" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              "$RUNNER_TEMP/voice-models/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
+              "$RUNNER_TEMP/voice-models/parakeet-tdt-stt-models.zip" \
+              "$RUNNER_TEMP/voice-models/supertonic-tts-models.zip" \
+              "$RUNNER_TEMP/voice-models/SHA256SUMS.txt" \
+              --title "HeretIc Offline Voice Pipeline Model Pack (v1)" \
+              --notes "$NOTES"
+          fi

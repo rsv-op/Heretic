@@ -30,7 +30,9 @@ class HereticJsBridge(
     private val voicePipeline: VoicePipelineController? = null,
     private val onPickGgufModel: (() -> Unit)? = null,
     private val onPickSttDir: (() -> Unit)? = null,
+    private val onPickSttZip: (() -> Unit)? = null,
     private val onPickTtsDir: (() -> Unit)? = null,
+    private val onPickTtsZip: (() -> Unit)? = null,
     private val onOpenNativeVoiceUi: (() -> Unit)? = null,
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -154,10 +156,22 @@ class HereticJsBridge(
         mainHandler.post { onPickSttDir?.invoke() }
     }
 
+    /** Launches Android SAF document picker (`OpenDocument`) for selecting a Parakeet STT `.zip` bundle. */
+    @JavascriptInterface
+    fun pickSttModelZip() {
+        mainHandler.post { onPickSttZip?.invoke() }
+    }
+
     /** Launches Android SAF directory picker (`OpenDocumentTree`) for selecting the Supertonic TTS folder. */
     @JavascriptInterface
     fun pickTtsModelDir() {
         mainHandler.post { onPickTtsDir?.invoke() }
+    }
+
+    /** Launches Android SAF document picker (`OpenDocument`) for selecting a Supertonic TTS `.zip` bundle. */
+    @JavascriptInterface
+    fun pickTtsModelZip() {
+        mainHandler.post { onPickTtsZip?.invoke() }
     }
 
     /** Initializes `ParakeetEngine` + `SupertonicTTS` + `LlamaCppEngine` on a background IO dispatcher. */
