@@ -27,7 +27,9 @@ fun HereticApp(
     voicePipeline: VoicePipelineController? = null,
     onPickGguf: (() -> Unit)? = null,
     onPickSttDir: (() -> Unit)? = null,
+    onPickSttZip: (() -> Unit)? = null,
     onPickTtsDir: (() -> Unit)? = null,
+    onPickTtsZip: (() -> Unit)? = null,
     onSwitchToWebUi: (() -> Unit)? = null,
     initialTab: Int = 0,
 ) {
@@ -60,7 +62,9 @@ fun HereticApp(
                     voicePipeline = voicePipeline,
                     onPickGguf = onPickGguf,
                     onPickSttDir = onPickSttDir,
+                    onPickSttZip = onPickSttZip,
                     onPickTtsDir = onPickTtsDir,
+                    onPickTtsZip = onPickTtsZip,
                 )
                 1 -> ChatScreen(core, voice, scope)
                 2 -> ErrorScreen(core)
@@ -76,7 +80,9 @@ private fun VoicePipelineScreen(
     voicePipeline: VoicePipelineController?,
     onPickGguf: (() -> Unit)?,
     onPickSttDir: (() -> Unit)?,
+    onPickSttZip: (() -> Unit)?,
     onPickTtsDir: (() -> Unit)?,
+    onPickTtsZip: (() -> Unit)?,
 ) {
     if (voicePipeline == null) {
         Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
@@ -143,14 +149,18 @@ private fun VoicePipelineScreen(
                     singleLine = true,
                 )
                 if (onPickGguf != null) {
-                    OutlinedButton(onClick = onPickGguf, enabled = !uiState.isBusy) {
-                        Text("Pick .gguf File (SAF)")
+                    OutlinedButton(
+                        onClick = onPickGguf,
+                        enabled = !uiState.isBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Pick .gguf File (SAF)", maxLines = 1)
                     }
                 }
 
                 HorizontalDivider()
 
-                Text("2. Parakeet TDT STT Directory (+ optional silero_vad.onnx)", style = MaterialTheme.typography.labelLarge)
+                Text("2. Parakeet TDT STT (Silero VAD v6 built-in)", style = MaterialTheme.typography.labelLarge)
                 OutlinedTextField(
                     value = sttDraft,
                     onValueChange = { sttDraft = it },
@@ -159,15 +169,33 @@ private fun VoicePipelineScreen(
                     supportingText = { Text(uiState.readiness.sttMessage) },
                     singleLine = true,
                 )
-                if (onPickSttDir != null) {
-                    OutlinedButton(onClick = onPickSttDir, enabled = !uiState.isBusy) {
-                        Text("Pick Parakeet STT Folder (SAF)")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (onPickSttDir != null) {
+                        OutlinedButton(
+                            onClick = onPickSttDir,
+                            enabled = !uiState.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Pick STT Folder", maxLines = 1)
+                        }
+                    }
+                    if (onPickSttZip != null) {
+                        OutlinedButton(
+                            onClick = onPickSttZip,
+                            enabled = !uiState.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Import STT .zip", maxLines = 1)
+                        }
                     }
                 }
 
                 HorizontalDivider()
 
-                Text("3. Supertonic TTS Directory + Voice Style", style = MaterialTheme.typography.labelLarge)
+                Text("3. Supertonic TTS + Voice Style", style = MaterialTheme.typography.labelLarge)
                 OutlinedTextField(
                     value = ttsDraft,
                     onValueChange = { ttsDraft = it },
@@ -183,25 +211,42 @@ private fun VoicePipelineScreen(
                     label = { Text("Voice style JSON path (auto-detected if blank)") },
                     singleLine = true,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     if (onPickTtsDir != null) {
-                        OutlinedButton(onClick = onPickTtsDir, enabled = !uiState.isBusy) {
-                            Text("Pick Supertonic TTS Folder (SAF)")
+                        OutlinedButton(
+                            onClick = onPickTtsDir,
+                            enabled = !uiState.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Pick TTS Folder", maxLines = 1)
                         }
                     }
-                    Button(
-                        onClick = {
-                            voicePipeline.updatePaths(
-                                llamaModelPath = ggufDraft,
-                                sttModelDir = sttDraft,
-                                ttsModelDir = ttsDraft,
-                                voiceStylePath = styleDraft,
-                            )
-                        },
-                        enabled = !uiState.isBusy,
-                    ) {
-                        Text("Save Paths")
+                    if (onPickTtsZip != null) {
+                        OutlinedButton(
+                            onClick = onPickTtsZip,
+                            enabled = !uiState.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Import TTS .zip", maxLines = 1)
+                        }
                     }
+                }
+                Button(
+                    onClick = {
+                        voicePipeline.updatePaths(
+                            llamaModelPath = ggufDraft,
+                            sttModelDir = sttDraft,
+                            ttsModelDir = ttsDraft,
+                            voiceStylePath = styleDraft,
+                        )
+                    },
+                    enabled = !uiState.isBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Save Manual Paths", maxLines = 1)
                 }
             }
         }

@@ -308,24 +308,34 @@ function UnifiedVoicePipelinePanel() {
         </div>
 
         <div className="space-y-1.5">
-          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">2. Parakeet STT Folder</p>
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">2. Parakeet STT (Folder or .zip)</p>
           <Input value={sttDir} onChange={(e) => setSttDir(e.target.value)} placeholder="/data/.../voice_models/stt" />
           <div className="flex items-center justify-between gap-2">
-            <span className="truncate font-mono text-[10.5px] text-ash2">{cfg?.sttMessage ?? "encoder/decoder/joiner + vocab.txt"}</span>
-            <Button size="sm" variant="outline" onClick={() => native?.pickSttModelDir ? native.pickSttModelDir() : setNote("SAF STT folder picker runs inside the Android APK.")}>
-              Pick STT Dir
-            </Button>
+            <span className="truncate font-mono text-[10.5px] text-ash2">{cfg?.sttMessage ?? "encoder/decoder/joiner + nemo128 + vocab.txt"}</span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => native?.pickSttModelDir ? native.pickSttModelDir() : setNote("SAF STT folder picker runs inside the Android APK.")}>
+                Folder
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => native?.pickSttModelZip ? native.pickSttModelZip() : setNote("SAF STT .zip importer runs inside the Android APK.")}>
+                .zip
+              </Button>
+            </div>
           </div>
         </div>
 
         <div className="space-y-1.5">
-          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">3. Supertonic TTS Folder</p>
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">3. Supertonic TTS (Folder or .zip)</p>
           <Input value={ttsDir} onChange={(e) => setTtsDir(e.target.value)} placeholder="/data/.../voice_models/tts" />
           <div className="flex items-center justify-between gap-2">
             <span className="truncate font-mono text-[10.5px] text-ash2">{cfg?.ttsMessage ?? "ONNX + tts.json + voice_styles"}</span>
-            <Button size="sm" variant="outline" onClick={() => native?.pickTtsModelDir ? native.pickTtsModelDir() : setNote("SAF TTS folder picker runs inside the Android APK.")}>
-              Pick TTS Dir
-            </Button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => native?.pickTtsModelDir ? native.pickTtsModelDir() : setNote("SAF TTS folder picker runs inside the Android APK.")}>
+                Folder
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => native?.pickTtsModelZip ? native.pickTtsModelZip() : setNote("SAF TTS .zip importer runs inside the Android APK.")}>
+                .zip
+              </Button>
+            </div>
           </div>
         </div>
       </div>

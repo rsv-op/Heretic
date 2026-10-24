@@ -67,6 +67,7 @@ jobs:
           for needle in \
             "assets/index.html" \
             "assets/pglite-" \
+            "assets/silero_vad.onnx" \
             "lib/arm64-v8a/liblitertlm" \
             "lib/arm64-v8a/libllama_jni.so" \
             "lib/arm64-v8a/libonnxruntime.so"; do

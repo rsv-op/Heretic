@@ -152,10 +152,22 @@ class MainActivity : ComponentActivity() {
                     uri?.let { voicePipeline.importModelDirectoryUri(it, "stt") }
                 }
 
+                val sttZipPickerLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument(),
+                ) { uri: Uri? ->
+                    uri?.let { voicePipeline.importModelArchiveUri(it, "stt") }
+                }
+
                 val ttsTreePickerLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocumentTree(),
                 ) { uri: Uri? ->
                     uri?.let { voicePipeline.importModelDirectoryUri(it, "tts") }
+                }
+
+                val ttsZipPickerLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument(),
+                ) { uri: Uri? ->
+                    uri?.let { voicePipeline.importModelArchiveUri(it, "tts") }
                 }
 
                 fun loadModelFrom(uri: Uri, displayName: String, scope: CoroutineScope) {
@@ -236,10 +248,19 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val name = resolveFileName(it)
+                        val lower = name.lowercase()
                         when {
-                            name.endsWith(".litertlm", ignoreCase = true) -> loadModelFrom(it, name, scope)
-                            name.endsWith(".gguf", ignoreCase = true) -> {
+                            lower.endsWith(".litertlm") -> loadModelFrom(it, name, scope)
+                            lower.endsWith(".gguf") -> {
                                 voicePipeline.importGgufUri(it)
+                                emit("heretic-file-picked", name)
+                            }
+                            lower.endsWith(".zip") && (lower.contains("parakeet") || lower.contains("stt")) -> {
+                                voicePipeline.importModelArchiveUri(it, "stt")
+                                emit("heretic-file-picked", name)
+                            }
+                            lower.endsWith(".zip") && (lower.contains("supertonic") || lower.contains("tts")) -> {
+                                voicePipeline.importModelArchiveUri(it, "tts")
                                 emit("heretic-file-picked", name)
                             }
                             else -> emit("heretic-file-picked", name)
@@ -332,8 +353,14 @@ class MainActivity : ComponentActivity() {
                                             onPickSttDir = {
                                                 sttTreePickerLauncher.launch(null)
                                             },
+                                            onPickSttZip = {
+                                                sttZipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                                            },
                                             onPickTtsDir = {
                                                 ttsTreePickerLauncher.launch(null)
+                                            },
+                                            onPickTtsZip = {
+                                                ttsZipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
                                             },
                                             onOpenNativeVoiceUi = {
                                                 nativeInitialTab = 0
@@ -358,7 +385,13 @@ class MainActivity : ComponentActivity() {
                             voicePipeline = voicePipeline,
                             onPickGguf = { ggufPickerLauncher.launch(arrayOf("*/*")) },
                             onPickSttDir = { sttTreePickerLauncher.launch(null) },
+                            onPickSttZip = {
+                                sttZipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                            },
                             onPickTtsDir = { ttsTreePickerLauncher.launch(null) },
+                            onPickTtsZip = {
+                                ttsZipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                            },
                             onSwitchToWebUi = { useWebFrontend = true },
                             initialTab = nativeInitialTab,
                         )

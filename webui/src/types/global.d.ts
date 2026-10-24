@@ -25,7 +25,9 @@ export interface HereticNativeBridge {
   setVoiceModelPaths?: (ggufPath: string, sttDir: string, ttsDir: string, voiceStylePath: string) => string;
   pickGgufModel?: () => void;
   pickSttModelDir?: () => void;
+  pickSttModelZip?: () => void;
   pickTtsModelDir?: () => void;
+  pickTtsModelZip?: () => void;
   initUnifiedVoicePipeline?: () => void;
   startUnifiedVoiceListening?: () => boolean;
   stopUnifiedVoiceListening?: () => void;
