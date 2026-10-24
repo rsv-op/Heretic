@@ -32,7 +32,9 @@ class UnifiedVoiceOrchestrator(
     private val sttModelDir: File,
     private val ttsModelDir: File,
     private val llamaModelPath: String,
-    private val voiceStylePath: String
+    private val voiceStylePath: String,
+    val audioPlayer: PcmStreamingAudioPlayer = PcmStreamingAudioPlayer(),
+    private val autoPlayAudioTrack: Boolean = true,
 ) {
     companion object {
         private const val TAG = "UnifiedVoiceOrchestrator"
@@ -48,6 +50,14 @@ class UnifiedVoiceOrchestrator(
         private const val TTS_STEPS = 5
         private const val TTS_GAIN = 2.5f
         private const val TTS_SIBILANCE_MODE = 1
+
+        internal fun matchesStopKeyword(transcript: String): Boolean {
+            val stripped = transcript.trim().trim { !it.isLetterOrDigit() }.trim()
+            if (stripped.isEmpty()) return false
+            return stripped.equals(STOP_KEYWORD, ignoreCase = true) ||
+                stripped.startsWith("$STOP_KEYWORD ", ignoreCase = true) ||
+                stripped.endsWith(" $STOP_KEYWORD", ignoreCase = true)
+        }
     }
 
     private val appContext = context.applicationContext
@@ -62,7 +72,7 @@ class UnifiedVoiceOrchestrator(
     private val llamaEngine = LlamaCppEngine()
 
     @Volatile
-    private var isSpeaking = false
+    private var isSynthesizing = false
 
     @Volatile
     private var isShutdown = false
@@ -70,13 +80,25 @@ class UnifiedVoiceOrchestrator(
     private var captureJob: Job? = null
     private var currentGenJob: Job? = null
 
+    val isSpeaking: Boolean
+        get() = isSynthesizing || audioPlayer.isPlaying
+
+    val isListening: Boolean
+        get() = captureJob?.isActive == true
+
     suspend fun init(): Boolean = withContext(Dispatchers.IO) {
         check(!isShutdown) { "UnifiedVoiceOrchestrator has already been shut down" }
 
         LexiconManager.load(appContext)
 
-        if (!parakeetEngine.isLoaded) {
-            parakeetEngine.load(sttModelDir)
+        val sttReady = try {
+            if (!parakeetEngine.isLoaded) {
+                parakeetEngine.load(sttModelDir)
+            }
+            parakeetEngine.isLoaded
+        } catch (e: Exception) {
+            Log.e(TAG, "ParakeetEngine failed to load from ${sttModelDir.absolutePath}", e)
+            false
         }
 
         val libPath = File(appContext.applicationInfo.nativeLibraryDir, "libonnxruntime.so").absolutePath
@@ -99,12 +121,12 @@ class UnifiedVoiceOrchestrator(
             Log.e(TAG, "LlamaCppEngine failed to load model from $llamaModelPath")
         }
 
-        parakeetEngine.isLoaded && ttsReady && llmReady
+        sttReady && ttsReady && llmReady
     }
 
     fun startListening(
         onFinalTranscript: (String) -> Unit,
-        onTtsChunk: (ByteArray) -> Unit
+        onTtsChunk: (ByteArray) -> Unit = {},
     ) {
         if (isShutdown) {
             Log.w(TAG, "Ignoring startListening(): orchestrator is shut down")
@@ -123,7 +145,7 @@ class UnifiedVoiceOrchestrator(
                     when (endpointer.onFrame(prob)) {
                         SpeechEndpointer.Event.SpeechStart -> {
                             if (isSpeaking) {
-                                Log.i(TAG, "VAD speech start detected during TTS; stopping playback")
+                                Log.i(TAG, "VAD speech start detected during TTS playback; executing barge-in stop")
                                 stopPlayback()
                             }
                         }
@@ -147,8 +169,8 @@ class UnifiedVoiceOrchestrator(
 
                             onFinalTranscript(userText)
 
-                            if (isStopCommand(userText)) {
-                                Log.i(TAG, "Stop keyword detected in transcript; halting playback")
+                            if (matchesStopKeyword(userText)) {
+                                Log.i(TAG, "Stop keyword '$STOP_KEYWORD' detected in transcript; halting playback")
                                 stopPlayback()
                                 return@collect
                             }
@@ -177,12 +199,34 @@ class UnifiedVoiceOrchestrator(
         captureJob = null
     }
 
-    private fun runPipeline(prompt: String, onTtsChunk: (ByteArray) -> Unit) {
+    /**
+     * Runs a text prompt directly through `llama.cpp` -> [SentenceStreamingBuffer] ->
+     * [SupertonicTTS] -> [PcmStreamingAudioPlayer] without requiring microphone input.
+     */
+    fun speakPrompt(
+        prompt: String,
+        onAssistantSentence: (String) -> Unit = {},
+        onTtsChunk: (ByteArray) -> Unit = {},
+    ) {
+        val trimmed = prompt.trim()
+        if (trimmed.isEmpty() || isShutdown) return
+        if (matchesStopKeyword(trimmed)) {
+            stopPlayback()
+            return
+        }
+        runPipeline(trimmed, onTtsChunk, onAssistantSentence)
+    }
+
+    private fun runPipeline(
+        prompt: String,
+        onTtsChunk: (ByteArray) -> Unit,
+        onAssistantSentence: (String) -> Unit = {},
+    ) {
         val turnId = generationCounter.incrementAndGet()
 
-        // Signal any in-flight LLM decode or TTS synthesis to abort immediately
         llamaEngine.stop()
         SupertonicTTS.setCancelled(true)
+        audioPlayer.stopImmediate()
         currentGenJob?.cancel()
 
         currentGenJob = scope.launch(Dispatchers.IO) {
@@ -191,7 +235,7 @@ class UnifiedVoiceOrchestrator(
                     return@withLock
                 }
 
-                isSpeaking = true
+                isSynthesizing = true
                 val sentenceBuffer = SentenceStreamingBuffer { sentence ->
                     if (!currentCoroutineContext().isActive ||
                         SupertonicTTS.isCancelled() ||
@@ -199,6 +243,8 @@ class UnifiedVoiceOrchestrator(
                     ) {
                         return@SentenceStreamingBuffer
                     }
+
+                    onAssistantSentence(sentence)
 
                     val normalized = textNormalizer.normalize(sentence, TTS_LANG, false).trim()
                     if (normalized.isEmpty()) {
@@ -221,6 +267,9 @@ class UnifiedVoiceOrchestrator(
                         currentCoroutineContext().isActive &&
                         generationCounter.get() == turnId
                     ) {
+                        if (autoPlayAudioTrack) {
+                            audioPlayer.enqueueChunk(audio, SupertonicTTS.getAudioSampleRate())
+                        }
                         onTtsChunk(audio)
                     }
                 }
@@ -262,7 +311,7 @@ class UnifiedVoiceOrchestrator(
                     Log.e(TAG, "Error during LLM->TTS streaming pipeline", e)
                 } finally {
                     if (generationCounter.get() == turnId) {
-                        isSpeaking = false
+                        isSynthesizing = false
                     }
                 }
             }
@@ -273,9 +322,10 @@ class UnifiedVoiceOrchestrator(
         generationCounter.incrementAndGet()
         llamaEngine.stop()
         SupertonicTTS.setCancelled(true)
+        audioPlayer.stopImmediate()
         currentGenJob?.cancel()
         currentGenJob = null
-        isSpeaking = false
+        isSynthesizing = false
     }
 
     fun shutdown() {
@@ -284,6 +334,7 @@ class UnifiedVoiceOrchestrator(
 
         stopPlayback()
         stopListening()
+        audioPlayer.release()
         scope.cancel()
 
         try {
@@ -310,12 +361,4 @@ class UnifiedVoiceOrchestrator(
             silenceMs = ENDPOINTER_SILENCE_MS,
             minimumLengthMs = ENDPOINTER_MIN_LENGTH_MS
         )
-
-    private fun isStopCommand(transcript: String): Boolean {
-        val stripped = transcript.trim().trim { !it.isLetterOrDigit() }.trim()
-        if (stripped.isEmpty()) return false
-        return stripped.equals(STOP_KEYWORD, ignoreCase = true) ||
-            stripped.startsWith("$STOP_KEYWORD ", ignoreCase = true) ||
-            stripped.endsWith(" $STOP_KEYWORD", ignoreCase = true)
-    }
 }

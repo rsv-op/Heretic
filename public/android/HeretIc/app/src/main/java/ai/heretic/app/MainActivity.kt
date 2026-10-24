@@ -2,6 +2,7 @@ package ai.heretic.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -25,7 +26,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -41,6 +44,7 @@ import ai.heretic.app.ui.HereticApp
 import ai.heretic.app.ui.HereticJsBridge
 import ai.heretic.app.ui.HereticTheme
 import ai.heretic.app.voice.VoiceManager
+import com.heretic.voice.VoicePipelineController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,10 +76,9 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 val main = remember { Handler(Looper.getMainLooper()) }
                 var useWebFrontend by remember { mutableStateOf(true) }
+                var nativeInitialTab by remember { mutableIntStateOf(0) }
                 var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
-                // WebView JavaScript must be evaluated on the main thread, exactly
-                // like SpeechRecognizer and TextToSpeech.
                 fun emit(event: String, payload: String) {
                     main.post {
                         webViewRef?.evaluateJavascript(
@@ -83,6 +86,76 @@ class MainActivity : ComponentActivity() {
                             null,
                         )
                     }
+                }
+
+                val micLauncherRef = remember { java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null) }
+
+                val voicePipeline = remember {
+                    VoicePipelineController(
+                        context = applicationContext,
+                        onRequestRecordPermission = { micLauncherRef.get()?.invoke() },
+                        onStateBroadcast = {
+                            main.post {
+                                webViewRef?.let { wv ->
+                                    val jsonPayload = JSONObject().apply {
+                                        put("llamaModelPath", it.paths.llamaModelPath)
+                                        put("sttModelDir", it.paths.sttModelDir)
+                                        put("ttsModelDir", it.paths.ttsModelDir)
+                                        put("voiceStylePath", it.paths.voiceStylePath)
+                                        put("llmReady", it.readiness.llmReady)
+                                        put("sttReady", it.readiness.sttReady)
+                                        put("ttsReady", it.readiness.ttsReady)
+                                        put("styleReady", it.readiness.styleReady)
+                                        put("allReady", it.readiness.allReady)
+                                        put("llmMessage", it.readiness.llmMessage)
+                                        put("sttMessage", it.readiness.sttMessage)
+                                        put("ttsMessage", it.readiness.ttsMessage)
+                                        put("isBusy", it.isBusy)
+                                        put("isInitialized", it.isInitialized)
+                                        put("isListening", it.isListening)
+                                        put("isPlaying", it.isPlaying)
+                                        put("statusMessage", it.statusMessage)
+                                        put("lastUserTranscript", it.lastUserTranscript)
+                                        put("lastAssistantSentence", it.lastAssistantSentence)
+                                    }.toString()
+                                    wv.evaluateJavascript(
+                                        "window.dispatchEvent(new CustomEvent('heretic-voice-state', { detail: ${JSONObject.quote(jsonPayload)} }));",
+                                        null,
+                                    )
+                                }
+                            }
+                        },
+                    )
+                }
+
+                val voicePipelineMicLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission(),
+                ) { granted ->
+                    voicePipeline.onRecordPermissionResult(granted)
+                }
+
+                SideEffect {
+                    micLauncherRef.set {
+                        voicePipelineMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+
+                val ggufPickerLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument(),
+                ) { uri: Uri? ->
+                    uri?.let { voicePipeline.importGgufUri(it) }
+                }
+
+                val sttTreePickerLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocumentTree(),
+                ) { uri: Uri? ->
+                    uri?.let { voicePipeline.importModelDirectoryUri(it, "stt") }
+                }
+
+                val ttsTreePickerLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocumentTree(),
+                ) { uri: Uri? ->
+                    uri?.let { voicePipeline.importModelDirectoryUri(it, "tts") }
                 }
 
                 fun loadModelFrom(uri: Uri, displayName: String, scope: CoroutineScope) {
@@ -133,6 +206,7 @@ class MainActivity : ComponentActivity() {
 
                 DisposableEffect(Unit) {
                     onDispose {
+                        voicePipeline.shutdown()
                         voice.shutdown()
                         engine.close()
                     }
@@ -155,18 +229,20 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.OpenDocument(),
                 ) { uri: Uri? ->
                     uri?.let {
-                        // Storage Access Framework: exactly one grant, one file.
                         runCatching {
                             contentResolver.takePersistableUriPermission(
                                 it,
-                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION,
                             )
-                        } // not every provider grants persistable access; picking still works
+                        }
                         val name = resolveFileName(it)
-                        if (name.endsWith(".litertlm", ignoreCase = true)) {
-                            loadModelFrom(it, name, scope)
-                        } else {
-                            emit("heretic-file-picked", name)
+                        when {
+                            name.endsWith(".litertlm", ignoreCase = true) -> loadModelFrom(it, name, scope)
+                            name.endsWith(".gguf", ignoreCase = true) -> {
+                                voicePipeline.importGgufUri(it)
+                                emit("heretic-file-picked", name)
+                            }
+                            else -> emit("heretic-file-picked", name)
                         }
                     }
                 }
@@ -192,7 +268,6 @@ class MainActivity : ComponentActivity() {
                                 WebView(ctx).apply {
                                     settings.javaScriptEnabled = true
                                     settings.domStorageEnabled = true
-                                    // PGlite persists its database in IndexedDB.
                                     settings.databaseEnabled = true
                                     settings.allowFileAccess = false
                                     settings.allowContentAccess = false
@@ -250,6 +325,20 @@ class MainActivity : ComponentActivity() {
                                             onRequestModelLoad = {
                                                 filePickerLauncher.launch(arrayOf("*/*"))
                                             },
+                                            voicePipeline = voicePipeline,
+                                            onPickGgufModel = {
+                                                ggufPickerLauncher.launch(arrayOf("*/*"))
+                                            },
+                                            onPickSttDir = {
+                                                sttTreePickerLauncher.launch(null)
+                                            },
+                                            onPickTtsDir = {
+                                                ttsTreePickerLauncher.launch(null)
+                                            },
+                                            onOpenNativeVoiceUi = {
+                                                nativeInitialTab = 0
+                                                useWebFrontend = false
+                                            },
                                         ),
                                         "HereticNative",
                                     )
@@ -260,7 +349,19 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     } else {
-                        HereticApp(core = core, voice = voice)
+                        BackHandler {
+                            useWebFrontend = true
+                        }
+                        HereticApp(
+                            core = core,
+                            voice = voice,
+                            voicePipeline = voicePipeline,
+                            onPickGguf = { ggufPickerLauncher.launch(arrayOf("*/*")) },
+                            onPickSttDir = { sttTreePickerLauncher.launch(null) },
+                            onPickTtsDir = { ttsTreePickerLauncher.launch(null) },
+                            onSwitchToWebUi = { useWebFrontend = true },
+                            initialTab = nativeInitialTab,
+                        )
                     }
                 }
             }

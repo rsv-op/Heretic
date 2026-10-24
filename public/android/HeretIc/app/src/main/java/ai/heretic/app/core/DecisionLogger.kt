@@ -84,11 +84,6 @@ class DecisionLogger(context: Context) {
 
 /**
  * Baseline ADRs that ship with the build.
- *
- * The web command center seeds the same entries (ADR-009 / ADR-010) from
- * `webui/src/lib/seed.ts`, so the native log and the dashboard agree. Each
- * reasoning sentence must satisfy [DecisionRule]: the word "because" and at
- * least twelve words.
  */
 object DecisionSeeds {
 
@@ -114,23 +109,41 @@ object DecisionSeeds {
 
     val ABI_FILTERS = Decision(
         ref = "ADR-010",
-        title = "Package arm64-v8a and x86_64 only, dropping armeabi-v7a",
-        context = "com.google.ai.edge.litertlm:litertlm-android:0.18.0 is now a direct dependency and it ships " +
-            "native libraries for 64-bit ABIs only. The build previously filtered arm64-v8a and armeabi-v7a.",
+        title = "Package arm64-v8a exclusively with 16 KB ELF page alignment",
+        context = "Unified native inference combines llama.cpp ARMv8.2-A NEON dotprod/fp16, litertlm-android, " +
+            "and onnxruntime-android on Android 16 (API 36), where 16 KB page alignment and 64-bit ARM execution are mandatory.",
         options = listOf(
-            "abiFilters arm64-v8a + x86_64",
-            "Keep armeabi-v7a and skip LiteRT-LM on 32-bit",
-            "Ship a separate 32-bit APK flavour",
+            "abiFilters arm64-v8a with 16 KB page alignment",
+            "Keep armeabi-v7a and x86_64 multi-ABI fat APK",
+            "Ship separate per-ABI APKs",
         ),
-        choice = "abiFilters arm64-v8a + x86_64",
-        reasoning = "We filter to arm64-v8a and x86_64 because litertlm-android 0.18.0 publishes no armeabi-v7a " +
-            "binaries, so a 32-bit device would install successfully and then die with UnsatisfiedLinkError the " +
-            "moment the engine loaded, which is far worse than a clean install refusal.",
-        impact = "32-bit ARM devices are excluded by the installer; LiteRtLmEngine.isArm64Device() still refuses " +
-            "the engine with a readable message, and x86_64 keeps emulator and CI runs working.",
+        choice = "abiFilters arm64-v8a",
+        reasoning = "We filter native packaging to arm64-v8a exclusively because llama.cpp ARMv8.2-A NEON kernels " +
+            "and litertlm-android target 64-bit ARM hardware, and shipping partial ABIs would crash at runtime with " +
+            "UnsatisfiedLinkError while inflating uncompressed 16 KB page-aligned native libraries.",
+        impact = "All packaged native libraries (libllama_jni.so, libonnxruntime.so, liblitertlm) align to 16 KB " +
+            "page boundaries under jniLibs.useLegacyPackaging = false for Android 16 devices.",
     )
 
-    val ALL: List<Decision> = listOf(WEB_ASSET_LOADER, ABI_FILTERS)
+    val UNIFIED_VOICE_PIPELINE = Decision(
+        ref = "ADR-011",
+        title = "Unify Parakeet TDT STT, Silero VAD, llama.cpp JNI, and Supertonic TTS in-process",
+        context = "Hands-free offline voice interaction requires streaming microphone VAD/STT, low-latency token " +
+            "generation, sentence-level TTS synthesis, and instant AudioTrack barge-in without network calls.",
+        options = listOf(
+            "Unified in-process Kotlin + JNI + ONNX Runtime voice orchestrator",
+            "Platform SpeechRecognizer and Android TextToSpeech IPC services",
+            "Local loopback WebSocket server between separate processes",
+        ),
+        choice = "Unified in-process Kotlin + JNI + ONNX Runtime voice orchestrator",
+        reasoning = "We run Parakeet TDT, Silero VAD, llama.cpp JNI, and Supertonic TTS inside one unified " +
+            "orchestrator because sentence-streamed PCM chunks can feed a low-latency AudioTrack directly and " +
+            "immediately pause and flush on the shaz keyword or VAD barge-in.",
+        impact = "Zero network permissions, sub-sentence voice response latency, and deterministic cancellation " +
+            "across LLM decoding, ONNX diffusion steps, and AudioTrack buffers.",
+    )
+
+    val ALL: List<Decision> = listOf(WEB_ASSET_LOADER, ABI_FILTERS, UNIFIED_VOICE_PIPELINE)
 
     /** Seeds whose ref is not already in the append-only log. */
     fun missing(existingRefs: Collection<String>): List<Decision> =

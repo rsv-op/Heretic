@@ -9,4 +9,7 @@ public/android/HeretIc/app/src/main/assets/*.data
 
 public/android/HeretIc/build/
 public/android/HeretIc/app/build/
+public/android/HeretIc/app/.cxx/
 public/android/HeretIc/.gradle/
+public/android/HeretIc/app/src/main/cpp/llama.cpp/
+

@@ -57,18 +57,18 @@ if(DEFINED ANDROID_ABI AND ANDROID_ABI STREQUAL "arm64-v8a")
     endif()
 endif()
 
-# Resolve llama.cpp source tree across standard submodule locations
+# Resolve llama.cpp source tree across standard checkout locations
 if(NOT DEFINED LLAMA_CPP_DIR)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/CMakeLists.txt")
         set(LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp")
     elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../llama.cpp/CMakeLists.txt")
         get_filename_component(LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../llama.cpp" ABSOLUTE)
-    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../llama.cpp/CMakeLists.txt")
-        get_filename_component(LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../llama.cpp" ABSOLUTE)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../../llama.cpp/CMakeLists.txt")
+        get_filename_component(LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../../llama.cpp" ABSOLUTE)
     else()
         message(FATAL_ERROR
             "llama.cpp source directory not found. Clone llama.cpp into "
-            "app/src/main/cpp/llama.cpp (or ./llama.cpp at project root), "
+            "public/android/HeretIc/app/src/main/cpp/llama.cpp, "
             "or pass -DLLAMA_CPP_DIR=/path/to/llama.cpp")
     endif()
 endif()

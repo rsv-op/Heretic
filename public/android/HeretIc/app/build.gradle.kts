@@ -7,21 +7,38 @@ plugins {
 android {
     namespace = "ai.heretic.app"
     compileSdk = 36
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "ai.heretic.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "2.4.0-android16-personal"
+        versionCode = 25
+        versionName = "2.5.0-android16-unified-voice"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // litertlm-android 0.18.0 ships native libraries for arm64-v8a and x86_64
-        // only. There is no 32-bit ARM build, so armeabi-v7a is not packaged and
-        // LiteRtLmEngine.isArm64Device() refuses to load the engine there.
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17", "-O3")
+                arguments += listOf(
+                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_PLATFORM=android-26",
+                    "-DGGML_OPENMP=OFF",
+                    "-DGGML_LLAMAFILE=OFF",
+                )
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 
@@ -36,7 +53,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Signed locally with the operator's own debug/release key.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -54,17 +70,20 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
         jniLibs {
             useLegacyPackaging = false
-        }
+            pickFirsts += "**/libc++_shared.so"
         }
     }
 
-    // The single-file web command center is copied here by the build workflow:
-    //   cp dist/index.html app/src/main/assets/index.html
     sourceSets["main"].assets.srcDirs("src/main/assets")
 }
 
@@ -86,10 +105,10 @@ dependencies {
 
     // ---- On-device inference (offline, no cloud) -------------------------
     implementation(libs.litert)
-    // Optional GPU delegate for .tflite/.task models
     implementation(libs.litert.gpu)
-    // LiteRT-LM: loads the .litertlm Gemma bundles (Gemma 4 E2B / Gemma 3n E2B)
     implementation(libs.litertlm.android)
+    // ONNX Runtime Android for Parakeet TDT STT, Silero VAD v6, and Supertonic TTS
+    implementation(libs.onnxruntime.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
