@@ -198,6 +198,209 @@ function LitertlmImportPanel() {
   );
 }
 
+interface UnifiedVoiceConfig {
+  llamaModelPath?: string;
+  sttModelDir?: string;
+  ttsModelDir?: string;
+  voiceStylePath?: string;
+  llmReady?: boolean;
+  sttReady?: boolean;
+  ttsReady?: boolean;
+  styleReady?: boolean;
+  allReady?: boolean;
+  llmMessage?: string;
+  sttMessage?: string;
+  ttsMessage?: string;
+  isBusy?: boolean;
+  isInitialized?: boolean;
+  isListening?: boolean;
+  isPlaying?: boolean;
+  statusMessage?: string;
+  lastUserTranscript?: string;
+  lastAssistantSentence?: string;
+}
+
+function UnifiedVoicePipelinePanel() {
+  const native = typeof window !== "undefined" ? window.HereticNative : undefined;
+  const [cfg, setCfg] = useState<UnifiedVoiceConfig | null>(null);
+  const [ggufPath, setGgufPath] = useState("");
+  const [sttDir, setSttDir] = useState("");
+  const [ttsDir, setTtsDir] = useState("");
+  const [stylePath, setStylePath] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!native?.getVoicePipelineConfig) return;
+    try {
+      const parsed = JSON.parse(native.getVoicePipelineConfig()) as UnifiedVoiceConfig;
+      setCfg(parsed);
+      setGgufPath(parsed.llamaModelPath ?? "");
+      setSttDir(parsed.sttModelDir ?? "");
+      setTtsDir(parsed.ttsModelDir ?? "");
+      setStylePath(parsed.voiceStylePath ?? "");
+    } catch {
+      setCfg(null);
+    }
+    const onVoiceState = (event: Event) => {
+      try {
+        const parsed = JSON.parse((event as CustomEvent<string>).detail) as UnifiedVoiceConfig;
+        setCfg(parsed);
+        if (parsed.llamaModelPath !== undefined) setGgufPath(parsed.llamaModelPath);
+        if (parsed.sttModelDir !== undefined) setSttDir(parsed.sttModelDir);
+        if (parsed.ttsModelDir !== undefined) setTtsDir(parsed.ttsModelDir);
+        if (parsed.voiceStylePath !== undefined) setStylePath(parsed.voiceStylePath);
+      } catch {
+        /* ignore malformed event frames */
+      }
+    };
+    window.addEventListener("heretic-voice-state", onVoiceState);
+    return () => window.removeEventListener("heretic-voice-state", onVoiceState);
+  }, [native]);
+
+  const savePaths = () => {
+    if (!native?.setVoiceModelPaths) {
+      setNote("Attach inside the Android APK to configure local GGUF / Parakeet / Supertonic model paths.");
+      return;
+    }
+    try {
+      const updated = JSON.parse(native.setVoiceModelPaths(ggufPath, sttDir, ttsDir, stylePath)) as UnifiedVoiceConfig;
+      setCfg(updated);
+      setNote(updated.statusMessage ?? "Paths saved.");
+    } catch {
+      setNote("Saved model paths.");
+    }
+  };
+
+  return (
+    <Panel className="overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
+        <div>
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.22em] text-ash2">
+            llama.cpp JNI · Parakeet TDT · Silero VAD · Supertonic TTS
+          </p>
+          <h3 className="mt-1 font-display text-base font-semibold tracking-tight">
+            Unified Voice Pipeline · Low-latency AudioTrack + SAF model pickers
+          </h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={cfg?.llmReady ? "mint" : "neutral"}>GGUF {cfg?.llmReady ? "ready" : "unset"}</Badge>
+          <Badge tone={cfg?.sttReady ? "mint" : "neutral"}>STT {cfg?.sttReady ? "ready" : "unset"}</Badge>
+          <Badge tone={cfg?.ttsReady && cfg?.styleReady ? "mint" : "neutral"}>TTS {cfg?.ttsReady && cfg?.styleReady ? "ready" : "unset"}</Badge>
+          {native?.openNativeVoiceConsole && (
+            <Button size="sm" variant="outline" onClick={() => native.openNativeVoiceConsole?.()}>
+              Native Console
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-3 px-5 py-4 md:grid-cols-3">
+        <div className="space-y-1.5">
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">1. LLM (.gguf)</p>
+          <Input value={ggufPath} onChange={(e) => setGgufPath(e.target.value)} placeholder="/data/.../voice_models/llm/model.gguf" />
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate font-mono text-[10.5px] text-ash2">{cfg?.llmMessage ?? "Pick local .gguf file"}</span>
+            <Button size="sm" variant="outline" onClick={() => native?.pickGgufModel ? native.pickGgufModel() : setNote("SAF .gguf picker runs inside the Android APK.")}>
+              Pick .gguf
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">2. Parakeet STT Folder</p>
+          <Input value={sttDir} onChange={(e) => setSttDir(e.target.value)} placeholder="/data/.../voice_models/stt" />
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate font-mono text-[10.5px] text-ash2">{cfg?.sttMessage ?? "encoder/decoder/joiner + vocab.txt"}</span>
+            <Button size="sm" variant="outline" onClick={() => native?.pickSttModelDir ? native.pickSttModelDir() : setNote("SAF STT folder picker runs inside the Android APK.")}>
+              Pick STT Dir
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ash2">3. Supertonic TTS Folder</p>
+          <Input value={ttsDir} onChange={(e) => setTtsDir(e.target.value)} placeholder="/data/.../voice_models/tts" />
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate font-mono text-[10.5px] text-ash2">{cfg?.ttsMessage ?? "ONNX + tts.json + voice_styles"}</span>
+            <Button size="sm" variant="outline" onClick={() => native?.pickTtsModelDir ? native.pickTtsModelDir() : setNote("SAF TTS folder picker runs inside the Android APK.")}>
+              Pick TTS Dir
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-line px-5 py-3.5">
+        <Button size="sm" variant="outline" onClick={savePaths}>
+          Save Paths
+        </Button>
+        <Button
+          size="sm"
+          variant="primary"
+          loading={Boolean(cfg?.isBusy)}
+          onClick={() => (native?.initUnifiedVoicePipeline ? native.initUnifiedVoicePipeline() : setNote("Native JNI/ONNX initialization runs on-device in the APK."))}
+        >
+          {cfg?.isInitialized ? "Reload Pipeline" : "Initialize Pipeline"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            if (!native?.startUnifiedVoiceListening) {
+              setNote("Hands-free Silero VAD + Parakeet STT capture runs inside the APK.");
+              return;
+            }
+            if (cfg?.isListening) native.stopUnifiedVoiceListening?.();
+            else native.startUnifiedVoiceListening();
+          }}
+        >
+          {cfg?.isListening ? "Stop Mic" : "Hands-Free Listen"}
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => native?.stopUnifiedVoicePlayback?.()}
+        >
+          SHAZ · Pause & Flush
+        </Button>
+
+        <div className="ml-auto flex min-w-[15rem] flex-1 items-center gap-2">
+          <Input
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Test llama.cpp → Supertonic speech…"
+            className="py-1.5 text-[12px]"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (!prompt.trim()) return;
+              if (native?.speakWithUnifiedVoice) {
+                native.speakWithUnifiedVoice(prompt.trim());
+                setPrompt("");
+              } else {
+                setNote("On-device TTS streaming runs inside the Android APK.");
+              }
+            }}
+          >
+            Speak
+          </Button>
+        </div>
+      </div>
+
+      {(cfg?.statusMessage || cfg?.lastUserTranscript || cfg?.lastAssistantSentence || note) && (
+        <div className="space-y-1 border-t border-line bg-panel2/30 px-5 py-3 font-mono text-[11px] text-ash">
+          {cfg?.statusMessage && <p>status: {cfg.statusMessage}</p>}
+          {cfg?.lastUserTranscript && <p>heard: {cfg.lastUserTranscript}</p>}
+          {cfg?.lastAssistantSentence && <p>spoken: {cfg.lastAssistantSentence}</p>}
+          {note && <p className="text-ash2">{note}</p>}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function AndroidPage() {
   const toast = useToast();
   const sources = useResource<{ sources: SourceRow[]; totals: { files: number; bytes: number; dirty: number } }>("/api/android/sources");
@@ -694,6 +897,11 @@ export default function AndroidPage() {
       {/* .litertlm model loader ------------------------------------------- */}
       <Reveal>
         <LitertlmImportPanel />
+      </Reveal>
+
+      {/* unified voice pipeline ------------------------------------------- */}
+      <Reveal>
+        <UnifiedVoicePipelinePanel />
       </Reveal>
 
       {/* inference profiles ---------------------------------------------- */}

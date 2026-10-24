@@ -9,6 +9,7 @@ navigationCompose = "2.8.5"
 coroutines = "1.9.0"
 litert = "2.3.0"
 litertlm = "0.18.0"
+onnxruntime = "1.30.0"
 webkit = "1.12.1"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -26,6 +27,7 @@ androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "w
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 litert-gpu = { group = "com.google.ai.edge.litert", name = "litert-gpu", version.ref = "litert" }
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

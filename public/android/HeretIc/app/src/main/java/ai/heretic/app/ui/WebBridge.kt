@@ -1,10 +1,13 @@
 package ai.heretic.app.ui
 
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import ai.heretic.app.core.ErrorEngine
 import ai.heretic.app.core.HereticCore
 import ai.heretic.app.ml.LiteRtLmEngine
 import ai.heretic.app.voice.VoiceManager
+import com.heretic.voice.VoicePipelineController
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -14,8 +17,8 @@ import org.json.JSONObject
  * sensitive call passes an [ai.heretic.app.core.AuthorizationGate] first.
  *
  * Every method here may be invoked from the WebView's JavaBridge thread, so
- * anything touching SpeechRecognizer, TextToSpeech or evaluateJavascript is
- * marshalled onto the main looper by [VoiceManager] / the activity.
+ * anything touching SpeechRecognizer, TextToSpeech, SAF ActivityResultLaunchers,
+ * or evaluateJavascript is marshalled onto the main looper.
  */
 class HereticJsBridge(
     private val core: HereticCore,
@@ -24,7 +27,13 @@ class HereticJsBridge(
     private val onPickFileRequest: () -> Unit,
     private val onRequestMicPermission: () -> Unit,
     private val onRequestModelLoad: () -> Unit,
+    private val voicePipeline: VoicePipelineController? = null,
+    private val onPickGgufModel: (() -> Unit)? = null,
+    private val onPickSttDir: (() -> Unit)? = null,
+    private val onPickTtsDir: (() -> Unit)? = null,
+    private val onOpenNativeVoiceUi: (() -> Unit)? = null,
 ) {
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @JavascriptInterface
     fun coreVersion(): String = core.version
@@ -87,13 +96,16 @@ class HereticJsBridge(
     }
 
     @JavascriptInterface
-    fun stopSpeaking() = voice.stop()
+    fun stopSpeaking() {
+        voice.stop()
+        voicePipeline?.stopPlayback()
+    }
 
     @JavascriptInterface
-    fun triggerMic() = onRequestMicPermission()
+    fun triggerMic() = mainHandler.post { onRequestMicPermission() }.let {}
 
     @JavascriptInterface
-    fun triggerFilePicker() = onPickFileRequest()
+    fun triggerFilePicker() = mainHandler.post { onPickFileRequest() }.let {}
 
     /** Offline speech-pack and TTS voice-data report, as JSON. */
     @JavascriptInterface
@@ -105,7 +117,83 @@ class HereticJsBridge(
 
     /** Opens ACTION_OPEN_DOCUMENT; a .litertlm pick is streamed into filesDir/models. */
     @JavascriptInterface
-    fun triggerModelPicker() = onRequestModelLoad()
+    fun triggerModelPicker() = mainHandler.post { onRequestModelLoad() }.let {}
+
+    /** Returns JSON configuration and live readiness/playback state of the unified voice pipeline. */
+    @JavascriptInterface
+    fun getVoicePipelineConfig(): String =
+        voicePipeline?.toJsonConfig() ?: JSONObject().put("available", false).toString()
+
+    /** Updates local filesystem paths for `.gguf`, Parakeet STT dir, Supertonic TTS dir, and voice style JSON. */
+    @JavascriptInterface
+    fun setVoiceModelPaths(
+        ggufPath: String,
+        sttDir: String,
+        ttsDir: String,
+        voiceStylePath: String,
+    ): String {
+        val controller = voicePipeline ?: return JSONObject().put("available", false).toString()
+        controller.updatePaths(
+            llamaModelPath = ggufPath,
+            sttModelDir = sttDir,
+            ttsModelDir = ttsDir,
+            voiceStylePath = voiceStylePath,
+        )
+        return controller.toJsonConfig()
+    }
+
+    /** Launches Android SAF document picker (`OpenDocument`) for selecting a `.gguf` LLM file. */
+    @JavascriptInterface
+    fun pickGgufModel() {
+        mainHandler.post { onPickGgufModel?.invoke() }
+    }
+
+    /** Launches Android SAF directory picker (`OpenDocumentTree`) for selecting the Parakeet STT folder. */
+    @JavascriptInterface
+    fun pickSttModelDir() {
+        mainHandler.post { onPickSttDir?.invoke() }
+    }
+
+    /** Launches Android SAF directory picker (`OpenDocumentTree`) for selecting the Supertonic TTS folder. */
+    @JavascriptInterface
+    fun pickTtsModelDir() {
+        mainHandler.post { onPickTtsDir?.invoke() }
+    }
+
+    /** Initializes `ParakeetEngine` + `SupertonicTTS` + `LlamaCppEngine` on a background IO dispatcher. */
+    @JavascriptInterface
+    fun initUnifiedVoicePipeline() {
+        voicePipeline?.initialize()
+    }
+
+    /** Starts continuous hands-free Silero VAD + Parakeet STT + llama.cpp + Supertonic AudioTrack streaming. */
+    @JavascriptInterface
+    fun startUnifiedVoiceListening(): Boolean =
+        voicePipeline?.startListening() ?: false
+
+    /** Stops microphone capture while preserving loaded models in memory. */
+    @JavascriptInterface
+    fun stopUnifiedVoiceListening() {
+        voicePipeline?.stopListening()
+    }
+
+    /** Immediate `"shaz"` / emergency barge-in stop: pauses & flushes AudioTrack and halts LLM + TTS. */
+    @JavascriptInterface
+    fun stopUnifiedVoicePlayback() {
+        voicePipeline?.stopPlayback()
+    }
+
+    /** Streams a text prompt through `llama.cpp` -> `SentenceStreamingBuffer` -> `SupertonicTTS` -> `AudioTrack`. */
+    @JavascriptInterface
+    fun speakWithUnifiedVoice(prompt: String) {
+        voicePipeline?.speakPrompt(prompt)
+    }
+
+    /** Switches from WebView to the native Jetpack Compose Voice Pipeline configuration screen. */
+    @JavascriptInterface
+    fun openNativeVoiceConsole() {
+        mainHandler.post { onOpenNativeVoiceUi?.invoke() }
+    }
 
     @JavascriptInterface
     fun isArm64Device(): Boolean = engine.isArm64Device()
