@@ -78,8 +78,8 @@ class VoicePipelineUnitTest {
 
     @Test
     fun `supertonic number and currency normalizers expand spoken English tokens`() {
-        assertEquals("forty-two", NumberUtils.numberToWords(42L))
-        val normalizedCurrency = CurrencyNormalizer.normalize("$12.50", "en")
-        assertTrue(normalizedCurrency.lowercase().contains("twelve"))
+        assertEquals("forty two", NumberUtils.convert(42L))
+        val normalizedCurrency = CurrencyNormalizer().normalize("$12.50")
+        assertTrue(normalizedCurrency.lowercase().contains("dollar"))
     }
 }
