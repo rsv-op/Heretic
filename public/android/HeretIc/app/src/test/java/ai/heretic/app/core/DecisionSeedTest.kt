@@ -24,21 +24,25 @@ class DecisionSeedTest {
     }
 
     @Test
-    fun baselineSeedsDocumentTheAssetLoaderAndAbiDecisions() {
+    fun baselineSeedsDocumentTheAssetLoaderAbiAndUnifiedVoiceDecisions() {
         val refs = DecisionSeeds.ALL.map { it.ref }
-        assertEquals(listOf("ADR-009", "ADR-010"), refs)
+        assertEquals(listOf("ADR-009", "ADR-010", "ADR-011"), refs)
         assertTrue(DecisionSeeds.WEB_ASSET_LOADER.choice.contains("WebViewAssetLoader"))
         assertTrue(DecisionSeeds.WEB_ASSET_LOADER.reasoning.contains("allowFileAccess"))
         assertTrue(DecisionSeeds.ABI_FILTERS.choice.contains("arm64-v8a"))
         assertTrue(DecisionSeeds.ABI_FILTERS.reasoning.contains("UnsatisfiedLinkError"))
+        assertTrue(DecisionSeeds.UNIFIED_VOICE_PIPELINE.reasoning.contains("AudioTrack"))
     }
 
     @Test
     fun seedingSkipsRefsAlreadyInTheLog() {
-        assertEquals(2, DecisionSeeds.missing(emptyList()).size)
+        assertEquals(3, DecisionSeeds.missing(emptyList()).size)
         assertEquals(DecisionSeeds.ALL, DecisionSeeds.missing(emptyList()))
-        assertEquals(listOf(DecisionSeeds.ABI_FILTERS), DecisionSeeds.missing(listOf("ADR-009")))
-        assertEquals(emptyList<Decision>(), DecisionSeeds.missing(listOf("ADR-009", "ADR-010")))
+        assertEquals(
+            listOf(DecisionSeeds.ABI_FILTERS, DecisionSeeds.UNIFIED_VOICE_PIPELINE),
+            DecisionSeeds.missing(listOf("ADR-009")),
+        )
+        assertEquals(emptyList<Decision>(), DecisionSeeds.missing(listOf("ADR-009", "ADR-010", "ADR-011")))
         assertEquals(DecisionSeeds.ALL, DecisionSeeds.missing(listOf("ADR-001", "ADR-008")))
     }
 }
