@@ -1,0 +1,52 @@
+name: Cleanup Old Builds
+
+on:
+  push:
+    branches:
+      - arena/8c2d238a-heretic
+    paths:
+      - cleanup_old_builds.sh
+      - .github/workflows/cleanup-old-builds.yml
+  workflow_dispatch:
+    inputs:
+      keep_pr:
+        description: "Pull request number whose builds/artifacts must be preserved"
+        required: false
+        default: "7"
+      keep_branch:
+        description: "Explicit branch name to preserve (optional override)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Preview deletions without deleting anything"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+jobs:
+  purge-previous-builds:
+    name: Delete Builds, Artifacts & Releases Outside Active PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run build & artifact cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          chmod +x ./cleanup_old_builds.sh
+          ARGS=(--keep-pr "${{ inputs.keep_pr || '7' }}")
+          if [[ -n "${{ inputs.keep_branch }}" ]]; then
+            ARGS+=(--keep-branch "${{ inputs.keep_branch }}")
+          fi
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            ARGS+=(--dry-run)
+          fi
+          ./cleanup_old_builds.sh "${ARGS[@]}"
