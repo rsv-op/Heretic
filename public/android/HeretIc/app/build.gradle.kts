@@ -97,6 +97,44 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
 }
 
+/**
+ * Local staging guard.
+ *
+ * The split PGlite runtime (pglite-*.js / .wasm / .data, ~16 MB) is gitignored, so
+ * a clean checkout only carries index.html. Without staging, assembleDebug would
+ * still succeed and ship an APK whose dashboard cannot boot its database. This
+ * task fails the asset merge with the exact fix instead. Unit tests do not depend
+ * on it, so `:app:testDebugUnitTest` works on a bare checkout.
+ */
+val verifyWebAssets by tasks.registering {
+    val assetsDir = layout.projectDirectory.dir("src/main/assets").asFile
+    inputs.files(fileTree(assetsDir)).withPropertyName("webAssets")
+    doLast {
+        val html = File(assetsDir, "index.html")
+        check(html.isFile) {
+            "src/main/assets/index.html is missing. Run ./scripts/stage-web.sh from the repository root."
+        }
+        val text = html.readText()
+        val referenced = Regex("pglite-[A-Za-z0-9_-]+[.]js").findAll(text).map { it.value }.toSet()
+        val missing = referenced.filterNot { File(assetsDir, it).isFile }
+        check(missing.isEmpty()) {
+            "index.html references ${missing.joinToString(", ")}, which is missing from " +
+                "src/main/assets. Run ./scripts/stage-web.sh from the repository root."
+        }
+        val runtime = assetsDir.listFiles().orEmpty().filter {
+            it.name.startsWith("pglite-") && (it.extension == "wasm" || it.extension == "data")
+        }
+        check(runtime.isNotEmpty()) {
+            "The PGlite wasm/data runtime is not staged into src/main/assets. " +
+                "Run ./scripts/stage-web.sh from the repository root."
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(verifyWebAssets)
+}
+
 configurations.all {
     exclude(group = "androidx.work")
 }

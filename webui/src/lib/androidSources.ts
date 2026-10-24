@@ -239,6 +239,37 @@ configurations.all {
 `,
   },
   {
+    path: "public/android/HeretIc/app/src/main/java/ai/heretic/app/HereticApplication.kt",
+    language: "kotlin",
+    summary: "Application entry point: no services or receivers; seeds the baseline ADRs once on Dispatchers.IO.",
+    content: `package ai.heretic.app
+
+import android.app.Application
+import ai.heretic.app.core.DecisionLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+/**
+ * Application entry point. No services, receivers or periodic background work.
+ *
+ * The only work done here is a one-off write of the baseline ADRs into the
+ * append-only decision log. It runs on Dispatchers.IO so the startup path never
+ * performs disk I/O, and [DecisionLogger.seedBaseline] is idempotent, so this is
+ * a no-op after the first launch.
+ */
+class HereticApplication : Application() {
+
+    override fun onCreate() {
+        super.onCreate()
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { DecisionLogger(this@HereticApplication).seedBaseline() }
+        }
+    }
+}
+`,
+  },
+  {
     path: "public/android/HeretIc/app/src/main/java/ai/heretic/app/MainActivity.kt",
     language: "kotlin",
     summary: "Hosts the bundled single-file React UI in a WebView and wires it to HereticCore + VoiceManager.",
@@ -1297,7 +1328,7 @@ class AuthorizationGate(private val context: Context) {
   {
     path: "public/android/HeretIc/app/src/main/java/ai/heretic/app/core/DecisionLogger.kt",
     language: "kotlin",
-    summary: "Refuses any decision without the mandatory reasoning sentence (contains “because”, >= 12 words).",
+    summary: "Append-only JSON-lines decision log plus DecisionSeeds: the baseline ADR-009/ADR-010 entries and an idempotent seedBaseline().",
     content: `package ai.heretic.app.core
 
 import android.content.Context
@@ -1328,7 +1359,7 @@ object DecisionRule {
             if (!Regex("\\\\bbecause\\\\b", RegexOption.IGNORE_CASE).containsMatchIn(reasoning)) {
                 errors += "The reasoning sentence must contain the word because."
             }
-            if (words.size < MIN_WORDS) errors += "The reasoning sentence must be at least \$MIN_WORDS words (currently \${words.size})."
+            if (words.size < MIN_WORDS) errors += "The reasoning sentence must be at least $MIN_WORDS words (currently \${words.size})."
         }
         return errors
     }
@@ -1356,6 +1387,16 @@ class DecisionLogger(context: Context) {
         return Result.success(decision)
     }
 
+    /**
+     * Writes the baseline ADRs from [DecisionSeeds] once. Idempotent: refs already
+     * present in the log are skipped, so repeated launches never duplicate entries
+     * and a failed write is retried on the next start.
+     */
+    fun seedBaseline(): List<Decision> {
+        val existing = all().map { it.ref }.toSet()
+        return DecisionSeeds.missing(existing).mapNotNull { append(it).getOrNull() }
+    }
+
     fun all(): List<Decision> = runCatching {
         file.readLines().filter { it.isNotBlank() }.map {
             val o = JSONObject(it)
@@ -1370,6 +1411,61 @@ class DecisionLogger(context: Context) {
             )
         }
     }.getOrDefault(emptyList())
+}
+
+/**
+ * Baseline ADRs that ship with the build.
+ *
+ * The web command center seeds the same entries (ADR-009 / ADR-010) from
+ * \`webui/src/lib/seed.ts\`, so the native log and the dashboard agree. Each
+ * reasoning sentence must satisfy [DecisionRule]: the word "because" and at
+ * least twelve words.
+ */
+object DecisionSeeds {
+
+    val WEB_ASSET_LOADER = Decision(
+        ref = "ADR-009",
+        title = "Serve the web UI through WebViewAssetLoader instead of file://",
+        context = "Splitting the PGlite runtime out of index.html produced ES module chunks and a 10 MB .wasm " +
+            "asset. A WebView loading file:///android_asset/ cannot import modules or stream WebAssembly, and " +
+            "setting allowFileAccess = true to work around it re-opens local file reads the assessor was built to avoid.",
+        options = listOf(
+            "WebViewAssetLoader on https://appassets.androidplatform.net",
+            "file:///android_asset with allowFileAccess = true",
+            "Re-inline the runtime as base64 and keep the single file",
+            "Loopback HTTP server bound to 127.0.0.1",
+        ),
+        choice = "WebViewAssetLoader on https://appassets.androidplatform.net",
+        reasoning = "We serve app/src/main/assets through androidx.webkit WebViewAssetLoader because it gives the " +
+            "page a real https origin so ES module imports and wasm streaming work while allowFileAccess stays " +
+            "false, and a loopback server would have required the INTERNET permission this app refuses to declare.",
+        impact = "index.html drops from 53.1 MB to 1.08 MB, the 16 MB of wasm/data ship as compressible assets, " +
+            "and the manifest still declares no network permission.",
+    )
+
+    val ABI_FILTERS = Decision(
+        ref = "ADR-010",
+        title = "Package arm64-v8a and x86_64 only, dropping armeabi-v7a",
+        context = "com.google.ai.edge.litertlm:litertlm-android:0.18.0 is now a direct dependency and it ships " +
+            "native libraries for 64-bit ABIs only. The build previously filtered arm64-v8a and armeabi-v7a.",
+        options = listOf(
+            "abiFilters arm64-v8a + x86_64",
+            "Keep armeabi-v7a and skip LiteRT-LM on 32-bit",
+            "Ship a separate 32-bit APK flavour",
+        ),
+        choice = "abiFilters arm64-v8a + x86_64",
+        reasoning = "We filter to arm64-v8a and x86_64 because litertlm-android 0.18.0 publishes no armeabi-v7a " +
+            "binaries, so a 32-bit device would install successfully and then die with UnsatisfiedLinkError the " +
+            "moment the engine loaded, which is far worse than a clean install refusal.",
+        impact = "32-bit ARM devices are excluded by the installer; LiteRtLmEngine.isArm64Device() still refuses " +
+            "the engine with a readable message, and x86_64 keeps emulator and CI runs working.",
+    )
+
+    val ALL: List<Decision> = listOf(WEB_ASSET_LOADER, ABI_FILTERS)
+
+    /** Seeds whose ref is not already in the append-only log. */
+    fun missing(existingRefs: Collection<String>): List<Decision> =
+        ALL.filterNot { it.ref in existingRefs }
 }
 `,
   },

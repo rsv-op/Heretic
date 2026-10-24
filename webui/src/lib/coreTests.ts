@@ -104,5 +104,30 @@ java.lang.UnsatisfiedLinkError: dlopen failed: library "libheretic_jni.so" not f
   });
   add("DecisionRuleTest", "acceptsFullReasoningSentence", assert(accepted.valid, `words=${accepted.wordCount}`));
 
+  const baselineAdrs = [
+    {
+      ref: "ADR-009",
+      title: "Serve the web UI through WebViewAssetLoader instead of file://",
+      choice: "WebViewAssetLoader on https://appassets.androidplatform.net",
+      reasoning:
+        "We serve app/src/main/assets through androidx.webkit WebViewAssetLoader because it gives the page a real https origin so ES module imports and wasm streaming work while allowFileAccess stays false, and a loopback server would have required the INTERNET permission this app refuses to declare.",
+    },
+    {
+      ref: "ADR-010",
+      title: "Package arm64-v8a and x86_64 only, dropping armeabi-v7a",
+      choice: "abiFilters arm64-v8a + x86_64",
+      reasoning:
+        "We filter to arm64-v8a and x86_64 because litertlm-android 0.18.0 publishes no armeabi-v7a binaries, so a 32-bit device would install successfully and then die with UnsatisfiedLinkError the moment the engine loaded, which is far worse than a clean install refusal.",
+    },
+  ];
+  for (const adr of baselineAdrs) {
+    const checked = validateDecision(adr);
+    add(
+      "DecisionSeedTest",
+      `${adr.ref} satisfies the mandatory reasoning rule`,
+      assert(checked.valid && checked.hasBecause && checked.wordCount >= 12, `words=${checked.wordCount} ${checked.errors.join(" ")}`),
+    );
+  }
+
   return results;
 }

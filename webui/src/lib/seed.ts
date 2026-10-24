@@ -357,6 +357,41 @@ const DEMO_DECISIONS: {
     tags: ["ci", "build"],
     ageHours: 20,
   },
+  {
+    title: "Serve the web UI through WebViewAssetLoader instead of file://",
+    context:
+      "Splitting the PGlite runtime out of index.html produced ES module chunks and a 10 MB .wasm asset. A WebView loading file:///android_asset/ cannot import modules or stream WebAssembly, and setting allowFileAccess = true to work around it re-opens local file reads the assessor exists to avoid.",
+    options: [
+      "WebViewAssetLoader on https://appassets.androidplatform.net",
+      "file:///android_asset with allowFileAccess = true",
+      "Re-inline the runtime as base64 and keep the single file",
+      "Loopback HTTP server bound to 127.0.0.1",
+    ],
+    choice: "WebViewAssetLoader on https://appassets.androidplatform.net",
+    reasoning:
+      "We serve app/src/main/assets through androidx.webkit WebViewAssetLoader because it gives the page a real https origin so ES module imports and wasm streaming work while allowFileAccess stays false, and a loopback server would have required the INTERNET permission this app refuses to declare.",
+    impact:
+      "index.html drops from 53.1 MB to 1.08 MB, the 16 MB of wasm/data ship as compressible assets, and the manifest still declares no network permission.",
+    tags: ["webview", "assets", "security"],
+    ageHours: 5,
+  },
+  {
+    title: "Package arm64-v8a and x86_64 only, dropping armeabi-v7a",
+    context:
+      "com.google.ai.edge.litertlm:litertlm-android:0.18.0 is now a direct dependency and it ships native libraries for 64-bit ABIs only. The build previously filtered arm64-v8a and armeabi-v7a.",
+    options: [
+      "abiFilters arm64-v8a + x86_64",
+      "Keep armeabi-v7a and skip LiteRT-LM on 32-bit",
+      "Ship a separate 32-bit APK flavour",
+    ],
+    choice: "abiFilters arm64-v8a + x86_64",
+    reasoning:
+      "We filter to arm64-v8a and x86_64 because litertlm-android 0.18.0 publishes no armeabi-v7a binaries, so a 32-bit device would install successfully and then die with UnsatisfiedLinkError the moment the engine loaded, which is far worse than a clean install refusal.",
+    impact:
+      "32-bit ARM devices are excluded by the installer; LiteRtLmEngine.isArm64Device() still refuses the engine with a readable message, and x86_64 keeps emulator and CI runs working.",
+    tags: ["abi", "inference", "gradle"],
+    ageHours: 4,
+  },
 ];
 
 const DEMO_PROFILES = [

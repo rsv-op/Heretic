@@ -14,14 +14,13 @@ One repository, two frontends, one brain.
 ## Build locally
 
 ```bash
-cd webui
-npm ci && npm run typecheck && npm run build
-# index.html plus the split PGlite runtime, served by WebViewAssetLoader
-rm -f ../public/android/HeretIc/app/src/main/assets/*.{js,wasm,data}
-cp dist/* ../public/android/HeretIc/app/src/main/assets/
-cd ../public/android/HeretIc
+# from the repository root: builds webui/ and stages index.html + the split
+# PGlite runtime into app/src/main/assets (identical to what CI runs)
+./scripts/stage-web.sh
+
+cd public/android/HeretIc
 ./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug   # verifyWebAssets fails fast if staging was skipped
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
