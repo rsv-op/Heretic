@@ -21,6 +21,9 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
 
     <application
@@ -28,9 +31,9 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_heretic"
-        android:label="HeretIc"
+        android:label="Heretic"
         android:supportsRtl="true"
-        android:largeHeap="false"
+        android:largeHeap="true"
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.HeretIc">
 

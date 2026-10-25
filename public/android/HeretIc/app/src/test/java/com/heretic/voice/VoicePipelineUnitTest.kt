@@ -1,19 +1,27 @@
 package com.heretic.voice
 
+import ai.heretic.app.assistant.VoiceActionRouter
+import ai.heretic.app.core.FileAssessor
 import com.brahmadeo.supertonic.tts.utils.CurrencyNormalizer
 import com.brahmadeo.supertonic.tts.utils.NumberUtils
+import com.brahmadeo.supertonic.tts.utils.WavUtils
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.schabi.parakeetype.audio.MicScorer
 import org.schabi.parakeetype.audio.SpeechEndpointer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.math.PI
+import kotlin.math.sin
 
 class VoicePipelineUnitTest {
 
@@ -52,13 +60,15 @@ class VoicePipelineUnitTest {
     }
 
     @Test
-    fun `stop keyword matcher detects shaz with punctuation and ignores unrelated words`() {
+    fun `stop keyword matcher and voice action router detect shaz and stop commands`() {
         assertTrue(UnifiedVoiceOrchestrator.matchesStopKeyword("shaz"))
         assertTrue(UnifiedVoiceOrchestrator.matchesStopKeyword("Shaz."))
         assertTrue(UnifiedVoiceOrchestrator.matchesStopKeyword("SHAZ!"))
         assertTrue(UnifiedVoiceOrchestrator.matchesStopKeyword("shaz stop talking"))
         assertFalse(UnifiedVoiceOrchestrator.matchesStopKeyword("Shazam is a movie."))
-        assertFalse(UnifiedVoiceOrchestrator.matchesStopKeyword("What is the weather today?"))
+        assertTrue(VoiceActionRouter.isImmediateStop("shaz"))
+        assertTrue(VoiceActionRouter.isImmediateStop("stop speaking"))
+        assertFalse(VoiceActionRouter.isImmediateStop("what can you do"))
     }
 
     @Test
@@ -86,6 +96,44 @@ class VoicePipelineUnitTest {
         assertEquals("forty two", NumberUtils.convert(42L))
         val normalizedCurrency = CurrencyNormalizer().normalize("$12.50")
         assertTrue(normalizedCurrency.lowercase().contains("dollar"))
+    }
+
+    @Test
+    fun `wav utils writes valid RIFF WAVE header and round-trips PCM samples`() {
+        val tempDir = Files.createTempDirectory("heretic_wav_test").toFile()
+        try {
+            val pcm = ByteArray(1024) { (it % 127).toByte() }
+            val wavFile = tempDir.resolve("reply.wav")
+            WavUtils.saveWav(wavFile, pcm, sampleRate = 44_100)
+            val parsed = WavUtils.readWavPcm(wavFile)
+            assertNotNull(parsed)
+            assertEquals(44_100, parsed!!.second)
+            assertArrayEquals(pcm, parsed.first)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `mic scorer scores active high-frequency speech burst above quiet floor`() {
+        val samples = FloatArray(16_000) { i ->
+            if (i < 4_000) {
+                0.001f * sin(2.0 * PI * 200.0 * i / 16_000.0).toFloat()
+            } else {
+                (0.25f * sin(2.0 * PI * 400.0 * i / 16_000.0) +
+                    0.15f * sin(2.0 * PI * 4_200.0 * i / 16_000.0)).toFloat()
+            }
+        }
+        val cal = MicScorer.scoreSamples(samples, 16_000)
+        assertTrue("Expected positive SNR dB, got ${cal.snrDb}", cal.snrDb > 10f)
+        assertTrue("Expected quality score > 50, got ${cal.qualityScore}", cal.qualityScore > 50f)
+    }
+
+    @Test
+    fun `file assessor grades voice model zip bundles as WORKS`() {
+        val sttZip = FileAssessor.assess("parakeet-tdt-stt-models.zip")
+        assertEquals("WORKS", sttZip.relevance)
+        assertTrue(sttZip.usefulness >= 90)
     }
 
     @Test

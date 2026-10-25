@@ -72,6 +72,20 @@ object FileAssessor {
             ),
         ),
         FileRule(
+            ext = listOf(".zip"),
+            kind = "Voice model bundle (.zip)",
+            relevance = "WORKS",
+            usefulness = 95,
+            target = "filesDir/voice_models/{stt,tts}",
+            rationale = "Parakeet TDT STT (parakeet-tdt-stt-models.zip) and Supertonic ONNX TTS " +
+                "(supertonic-tts-models.zip) extract directly into app-private storage via SAF ZipInputStream.",
+            steps = listOf(
+                "Open Models tab and tap Import STT .zip or Import TTS .zip.",
+                "VoiceModelConfigStore verifies ONNX weights, vocab.txt, tts.json, and voice_styles/*.json.",
+                "Tap Activate Neural Engines to run offline STT and neural TTS.",
+            ),
+        ),
+        FileRule(
             ext = listOf(".onnx"),
             kind = "ONNX model",
             relevance = "PARTIALLY MATCHES",

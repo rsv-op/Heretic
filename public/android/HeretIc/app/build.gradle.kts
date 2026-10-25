@@ -13,8 +13,8 @@ android {
         applicationId = "ai.heretic.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "2.6.0-android16-unified-voice"
+        versionCode = 30
+        versionName = "3.0.0-native-voice-assistant"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -102,12 +102,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
 
-    // Serves app/src/main/assets over https://appassets.androidplatform.net so
-    // the WebView can import ES modules and stream the PGlite WebAssembly while
-    // allowFileAccess stays false.
-    implementation(libs.androidx.webkit)
-
-    // ---- On-device inference (offline, no cloud) -------------------------
+    // ---- On-device inference (100% offline, zero network) ----------------
     implementation(libs.litert)
     implementation(libs.litert.gpu)
     implementation(libs.litertlm.android)
@@ -121,41 +116,28 @@ dependencies {
 }
 
 /**
- * Local staging guard.
+ * Native Voice Assistant asset verification guard.
  *
- * The split PGlite runtime (pglite-*.js / .wasm / .data, ~16 MB) is gitignored, so
- * a clean checkout only carries index.html. Without staging, assembleDebug would
- * still succeed and ship an APK whose dashboard cannot boot its database. This
- * task fails the asset merge with the exact fix instead. Unit tests do not depend
- * on it, so `:app:testDebugUnitTest` works on a bare checkout.
+ * Ensures Silero VAD v6 (`silero_vad.onnx`) is embedded in `src/main/assets` and verifies
+ * that no legacy WebView (`index.html` / `pglite-*`) bundle is packaged into the native APK.
  */
-val verifyWebAssets by tasks.registering {
+val verifyVoiceAssets by tasks.registering {
     val assetsDir = layout.projectDirectory.dir("src/main/assets").asFile
-    inputs.files(fileTree(assetsDir)).withPropertyName("webAssets")
+    inputs.files(fileTree(assetsDir)).withPropertyName("voiceAssets")
     doLast {
-        val html = File(assetsDir, "index.html")
-        check(html.isFile) {
-            "src/main/assets/index.html is missing. Run ./scripts/stage-web.sh from the repository root."
+        val vad = File(assetsDir, "silero_vad.onnx")
+        check(vad.isFile && vad.length() > 1_000_000L) {
+            "src/main/assets/silero_vad.onnx is missing or truncated."
         }
-        val text = html.readText()
-        val referenced = Regex("pglite-[A-Za-z0-9_-]+[.]js").findAll(text).map { it.value }.toSet()
-        val missing = referenced.filterNot { File(assetsDir, it).isFile }
-        check(missing.isEmpty()) {
-            "index.html references ${missing.joinToString(", ")}, which is missing from " +
-                "src/main/assets. Run ./scripts/stage-web.sh from the repository root."
-        }
-        val runtime = assetsDir.listFiles().orEmpty().filter {
-            it.name.startsWith("pglite-") && (it.extension == "wasm" || it.extension == "data")
-        }
-        check(runtime.isNotEmpty()) {
-            "The PGlite wasm/data runtime is not staged into src/main/assets. " +
-                "Run ./scripts/stage-web.sh from the repository root."
+        val staleHtml = File(assetsDir, "index.html")
+        check(!staleHtml.exists()) {
+            "Legacy WebUI src/main/assets/index.html must not be packaged in the native Heretic Voice Assistant APK."
         }
     }
 }
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
-    dependsOn(verifyWebAssets)
+    dependsOn(verifyVoiceAssets)
 }
 
 configurations.all {

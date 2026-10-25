@@ -143,7 +143,30 @@ object DecisionSeeds {
             "across LLM decoding, ONNX diffusion steps, and AudioTrack buffers.",
     )
 
-    val ALL: List<Decision> = listOf(WEB_ASSET_LOADER, ABI_FILTERS, UNIFIED_VOICE_PIPELINE)
+    val NATIVE_VOICE_ASSISTANT_SHELL = Decision(
+        ref = "ADR-012",
+        title = "Boot directly into the native Jetpack Compose Voice Assistant without WebView",
+        context = "Shipping a 20 MB WebView + PGlite web dashboard as the primary launcher experience hid the " +
+            "native Android voice assistant behind browser chrome and prevented instant offline voice startup.",
+        options = listOf(
+            "Pure native Jetpack Compose Heretic Voice Assistant launcher",
+            "WebView-first hybrid wrapper loading assets/index.html",
+            "Dual-launcher APK with separate WebView activity",
+        ),
+        choice = "Pure native Jetpack Compose Heretic Voice Assistant launcher",
+        reasoning = "We boot MainActivity directly into the native Jetpack Compose Heretic Voice Assistant " +
+            "because removing the WebView eliminates twenty megabytes of web runtime overhead and gives immediate " +
+            "hands-free access to all voice, model, error, file, milestone, gate, and ADR workflows.",
+        impact = "Smaller APK footprint, instant cold-start into the voice assistant, out-of-the-box offline " +
+            "speech fallback, and seamless modular activation of Parakeet STT, llama.cpp, LiteRT-LM, and Supertonic TTS.",
+    )
+
+    val ALL: List<Decision> = listOf(
+        WEB_ASSET_LOADER,
+        ABI_FILTERS,
+        UNIFIED_VOICE_PIPELINE,
+        NATIVE_VOICE_ASSISTANT_SHELL,
+    )
 
     /** Seeds whose ref is not already in the append-only log. */
     fun missing(existingRefs: Collection<String>): List<Decision> =
