@@ -402,6 +402,7 @@ class LiteRtEngine(
     private class CompiledModelRuntime(
         private val compiledModel: CompiledModel,
         override val backendTag: String,
+        private val ownedEnvironment: Environment? = null,
     ) : ActiveRuntime {
         override fun execute(inputs: Array<FloatArray>) {
             val inBuffers = compiledModel.createInputBuffers()
@@ -421,6 +422,7 @@ class LiteRtEngine(
 
         override fun close() {
             runCatching { compiledModel.close() }
+            runCatching { ownedEnvironment?.close() }
         }
     }
 
@@ -659,15 +661,7 @@ class LiteRtEngine(
                 )
             }
             val compiled = CompiledModel.create(appContext.assets, assetPath, options, env)
-            return object : ActiveRuntime {
-                private val inner = CompiledModelRuntime(compiled, "gpu")
-                override val backendTag: String get() = inner.backendTag
-                override fun execute(inputs: Array<FloatArray>) = inner.execute(inputs)
-                override fun close() {
-                    inner.close()
-                    runCatching { env.close() }
-                }
-            }
+            return CompiledModelRuntime(compiled, "gpu", ownedEnvironment = env)
         } catch (err: Throwable) {
             runCatching { env.close() }
             throw err
@@ -690,15 +684,7 @@ class LiteRtEngine(
                 )
             }
             val compiled = CompiledModel.create(file.absolutePath, options, env)
-            return object : ActiveRuntime {
-                private val inner = CompiledModelRuntime(compiled, "gpu")
-                override val backendTag: String get() = inner.backendTag
-                override fun execute(inputs: Array<FloatArray>) = inner.execute(inputs)
-                override fun close() {
-                    inner.close()
-                    runCatching { env.close() }
-                }
-            }
+            return CompiledModelRuntime(compiled, "gpu", ownedEnvironment = env)
         } catch (err: Throwable) {
             runCatching { env.close() }
             throw err
