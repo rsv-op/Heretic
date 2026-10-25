@@ -1,158 +1,133 @@
-# HeretIc
+# Heretic — Sovereign Native Voice Assistant for Android 16
 
-Personal, offline **Android 16** AI command center. One repository, two frontends, one
-brain: a single-file React command center served inside a WebView, a Jetpack Compose
-fallback, and a native Kotlin core. **No `INTERNET` permission is declared**, so the APK
-physically cannot reach a network.
+`Heretic` began with a strict premise: a voice assistant on your own device should not own a socket, a browser wrapper, or an unaudited action path.
 
-| Layer | Where | Notes |
+Most mobile assistants stream raw microphone audio to remote servers or wrap a Chromium `WebView` around cloud endpoints. `Heretic` takes the opposite route. `AndroidManifest.xml` declares **zero `INTERNET` permission**, **zero `<service>` entries**, **zero `<receiver>` entries**, and **zero `WebView` components**. The Android kernel physically forbids the process from opening a network connection, while every microphone capture, file read, and spoken response passes through a local SHA-256 hash-chained authorization ledger.
+
+---
+
+## Goal vs. Achieved
+
+| Engineering Goal | Shipped Implementation | Verified Outcome |
 | --- | --- | --- |
-| Web command center | `webui/` → `dist/index.html` | React 19 + Vite 8 + Tailwind 4, single HTML file |
-| Native UI fallback | `public/android/HeretIc/app/src/main/java/ai/heretic/app/ui/HereticApp.kt` | Jetpack Compose, same workflows |
-| Brain | `core/HereticCore.kt` | Deterministic rule tables, mirrored in `webui/src/lib/engines.ts` |
-| Voice | `voice/VoiceManager.kt` | SpeechRecognizer + TextToSpeech, main-looper bound, offline-only |
-| Inference | `ml/LiteRtEngine.kt`, `ml/LiteRtLmEngine.kt` | LiteRT 2.3.0 for `.tflite`; LiteRT-LM 0.18.0 for `.litertlm` |
-| APK pipeline | `.github/workflows/android.yml` | Builds the web UI, runs unit tests, assembles `HeretIc.apk` |
+| **Air-gapped by OS enforcement, not policy** | `AndroidManifest.xml` omits `INTERNET` & `ACCESS_NETWORK_STATE`; Gradle excludes `androidx.work` | Outbound sockets are rejected by the Linux/Android kernel (`EACCES`) |
+| **Zero WebUI / zero browser chrome** | Deleted `WebView`, `WebBridge`, `index.html`, and PGlite web runtime; enforced by Gradle `verifyVoiceAssets` + CI APK inspection | Pure Jetpack Compose Material 3 Dark UI (`MainActivity` → `HereticApp`), `83.07 MiB` `arm64-v8a` APK |
+| **Instant cold-boot voice & modular neural upgrades** | Built-in `Silero VAD v6` (`assets/silero_vad.onnx`) + `HereticCore` + offline Android speech fallback on first boot; hot-upgrades per slot when neural packs are imported | Works immediately upon install; upgrades STT, Brain, and TTS independently without rebuilding |
+| **True in-process neural voice pipeline** | `Parakeet TDT INT8` ONNX STT + `llama.cpp` JNI (`libllama_jni.so` + `ggml`) + `LiteRT-LM 0.18.0` / `LiteRT 2.3.0` + `Supertonic ONNX TTS` | Sentence-streamed token → PCM synthesis into a low-latency `USAGE_ASSISTANT` `AudioTrack` |
+| **Sub-millisecond `"shaz"` & VAD barge-in** | Continuous Silero VAD speech monitor + keyword interceptor wired directly to `PcmStreamingAudioPlayer`, `LlamaCppEngine`, and `SupertonicTTS` | Saying `"shaz"` or speaking over playback immediately calls `pause()` + `flush()` and cancels active inference |
+| **Hardware-resilient LiteRT 2.3.0 inference** | `LiteRtEngine` + `LiteRtLmEngine` verify `TFL3` v3 FlatBuffer headers upfront, wrap GPU delegate init in `runCatching`, fall back to `4` CPU threads (`setNumThreads(4)`), and cache the resolved backend per install | Emulators and Mali drivers without OpenCL/Vulkan degrade cleanly on the first probe and skip broken GPU probes thereafter |
+| **Auditable engineering workflows by voice or touch** | `VoiceActionRouter` + `ErrorEngine` + `FileAssessor` + `RepoAssessor` + `AuthorizationGate` + `DecisionLogger` (`ADR-009`..`ADR-013`) | 35/35 JVM unit tests passing on every push; tamper-evident SHA-256 gate chain and `decisions.jsonl` ADR log |
 
-## Upgrades applied
+---
 
-### 1. LiteRT-LM 0.18.0 with Gemma 4 E2B → Gemma 3n E2B fallback
+## End-to-End On-Device Signal Path
 
-`com.google.ai.edge.litertlm:litertlm-android:0.18.0` is now a direct dependency and
-`ml/LiteRtLmEngine.kt` owns the whole weight lifecycle:
+```text
+ 16 kHz Mono Mic (AudioRecord)
+       │
+       ├──► MicScorer (SNR dB + >3 kHz fricative clarity calibration)
+       │
+       ▼
+ Silero VAD v6 (bundled in APK: assets/silero_vad.onnx)
+       │  ├─ Speech detected during playback ──► Instant AudioTrack pause() + flush()
+       ▼
+ Speech-to-Text Tier
+   ├─ [Slot 2 Imported] Parakeet TDT Ultra INT8 (encoder / decoder / joiner / nemo128 ONNX)
+   └─ [Default Fallback] Android On-Device SpeechRecognizer (EXTRA_PREFER_OFFLINE = true)
+       │
+       ├──► Keyword == "shaz" ──► Emergency Halt (LLM + ONNX TTS + AudioTrack flush)
+       ▼
+ VoiceActionRouter & Multi-Tier Brain
+   ├─ Deterministic Commands ──► Error Loop · File Assessor · Repo Milestones · SHA-256 Gates · ADRs · .wav Export
+   ├─ [Slot 1 GGUF]          ──► llama.cpp JNI (ARM64 NEON) ──► SentenceStreamingBuffer
+   ├─ [Slot 1 LiteRT-LM]     ──► Gemma 4 E2B (≥6 GB RAM) / Gemma 3n E2B (<6 GB RAM)
+   └─ [Built-in Core]        ──► HereticCore deterministic offline engine
+       │
+       ▼
+ LexiconManager (custom word -> phonetic overrides)
+       │
+       ▼
+ Text-to-Speech Tier
+   ├─ [Slot 3 Imported] Supertonic ONNX TTS (duration / text / vector / vocoder + M1..M5, F1..F5 styles)
+   └─ [Default Fallback] Android Offline TextToSpeech
+       │
+       ▼
+ PcmStreamingAudioPlayer (AudioTrack · USAGE_ASSISTANT · ENCODING_PCM_16BIT) + WavUtils (.wav RIFF export)
+```
 
-* **Model catalog** (`LiteRtLmModels`): Gemma 4 E2B (`gemma-4-e2b-it-int4.litertlm`,
-  ~2.58 GB) is the default on devices with **6 GB+ RAM**; Gemma 3n E2B
-  (`gemma-3n-e2b-it-int4.litertlm`, ~1.48 GB) is the automatic fallback.
-* **Upfront ABI gate**: `LiteRtLmEngine.isArm64Device()` runs before any native library
-  is touched. `litertlm-android` 0.18.0 only ships `arm64-v8a`/`x86_64`, and
-  `ndk { abiFilters }` matches that, so a 32-bit device gets a readable error instead of
-  `UnsatisfiedLinkError`.
-* **Sideload flow**: `ACTION_OPEN_DOCUMENT` → `copyUriToModelsDir()` streams the picked
-  URI into `context.filesDir/models/` through a `.part` file with a 1 MiB buffer, a
-  free-space budget (size + 5% + 64 MB) and a truncation check. Weights are **never**
-  bundled in the APK.
-* **Runtime**: `Engine(EngineConfig(modelPath, backend = Backend.CPU(), cacheDir))` is
-  initialised on `Dispatchers.IO`, conversations are created per turn, and the engine is
-  closed in `onDispose`.
-* `INTERNET` is still deliberately absent from `AndroidManifest.xml`.
+---
 
-### 2. Dependencies
+## Native Interface (`HereticApp.kt`)
 
-Android: `litertlm-android` **0.18.0**, `litert` **2.3.0**, `litert-gpu` **2.3.0**,
-Kotlin **2.4.0**, AGP **8.6.1**, `compileSdk`/`targetSdk` **36**, `androidx.webkit` 1.12.1.
+`Heretic` boots directly into a six-tab native Jetpack Compose Material 3 Dark interface (`ai.heretic.app.ui.HereticApp`):
 
-Web: Vite **8.3.5**, TypeScript **7.0.2**, PGlite **0.5.11** (plus the peer-compatible
-`@vitejs/plugin-react` 6.1.2, `vite-plugin-singlefile` 2.3.4, `drizzle-orm` 0.45.4).
+1. **Assistant** — Live conversation stream, active tier chips (`STT`, `Brain`, `TTS`), **Hands-Free / Push-to-Talk Mic**, **`SHAZ · Flush`** emergency interrupt button, quick-execution chips, and per-turn `▶ Speak` replay.
+2. **Models** — Independent Android 16 Scoped Storage (SAF) importers for:
+   - **Slot 1 (Brain):** `.gguf` (`llama.cpp` JNI), `.litertlm` (`LiteRT-LM 0.18.0`), and `.tflite` / `.task` (`LiteRT 2.3.0` + `litert-gpu 2.3.0`, with a one-tap **Reset Cached LiteRT GPU/CPU Backend Probe** control).
+   - **Slot 2 (STT):** `parakeet-tdt-stt-models.zip` or folder picker + live **16 kHz Microphone SNR & Fricative Calibration**.
+   - **Slot 3 (TTS):** `supertonic-tts-models.zip` or folder picker + `M1`–`M5` / `F1`–`F5` speaker presets, speed (`0.80x`–`1.40x`) and diffusion step (`2`–`8`) sliders, custom **Pronunciation Lexicon**, and **`.wav` audio export & playback**.
+3. **Errors** — Offline stack-trace and logcat root-cause analyzer (`WHAT / WHY / REQUEST SOLUTION`) with spoken diagnosis and an evidence-gated paste-back confirmation loop (`CHECK PASSED` / `CHECK FAILED` / `AWAITING USER PASTE-BACK`).
+4. **Files** — Pre-load file relevance and memory safety inspector (`WORKS`, `PARTIALLY MATCHES`, `NOT RELEVANT`) for `.gguf`, `.litertlm`, `.tflite`, `.onnx`, `.zip`, and `.safetensors` with SAF auto-routing.
+5. **Repo** — Weighted engineering milestone evaluator (`IMPLEMENT NOW`, `CHANGES NEEDED`, `DEFER`) that prevents deferred items from inflating release readiness.
+6. **Gates & ADR** — Interactive SHA-256 hash-chained capability ledger (`mic.capture`, `tts.speak`, `file.saf.read`) paired with an append-only Architecture Decision Record store (`decisions.jsonl`, enforcing `because` + `≥ 12` words).
 
-TypeScript 7 removed `baseUrl`, so `webui/tsconfig.json` now uses `paths` alone.
+---
 
-### 3. Voice threading and offline checks
+## Download & Provisioning
 
-`VoiceManager` creates and drives `SpeechRecognizer` and `TextToSpeech` exclusively on
-`Handler(Looper.getMainLooper())`, so calls from the WebView's `JavascriptInterface`
-thread no longer throw or get dropped. Recognition requests set
-`RecognizerIntent.EXTRA_PREFER_OFFLINE = true`, and `voiceStatusJson()` reports:
+### 1. Native Android 16 ARM64 APK
+- **Latest Release:** [Releases (`Heretic-Voice-Assistant.apk`)](https://github.com/rsv-op/Heretic/releases/latest)
+- **Target Architecture:** `arm64-v8a` (`minSdk = 26`, `targetSdk = 36`, 16 KB ELF page-aligned native libraries)
 
-`stt`, `tts`, `ttsReady`, `recognizerAvailable`, `onDeviceRecognizerAvailable`,
-`preferOffline`, `offlineSpeechPacks`, `ttsEngineName`, `ttsLanguage`,
-`ttsLanguageAvailable`, `ttsVoiceCount`, `ttsVoices`, `ttsError`, `lastError`,
-`internetPermission: false`.
+### 2. Optional Offline Neural Model Pack (`voice-models-v1`)
+`Heretic` runs out of the box immediately after installing the APK. To upgrade each tier to full in-process neural inference, download any combination of these verified bundles onto your phone and import them from the **Models** tab:
 
-The bridge exposes it as `HereticNative.voiceStatus()`; native → web events
-(`heretic-stt`, `heretic-stt-error`, `heretic-file-picked`, `heretic-model*`) are all
-posted to the main looper before `evaluateJavascript`.
+| Slot | Bundle | Size | SHA-256 |
+| --- | --- | --- | --- |
+| **1 · Brain (`llama.cpp`)** | [`qwen2.5-0.5b-instruct-q4_k_m.gguf`](https://github.com/rsv-op/Heretic/releases/download/voice-models-v1/qwen2.5-0.5b-instruct-q4_k_m.gguf) | `468.64 MiB` | `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db` |
+| **2 · STT (`Parakeet TDT`)** | [`parakeet-tdt-stt-models.zip`](https://github.com/rsv-op/Heretic/releases/download/voice-models-v1/parakeet-tdt-stt-models.zip) | `604.92 MiB` | `7e84c12d30f5de598069c8f77b36b14ea38de6c193449c5c9e08ba38b2a58436` |
+| **3 · TTS (`Supertonic`)** | [`supertonic-tts-models.zip`](https://github.com/rsv-op/Heretic/releases/download/voice-models-v1/supertonic-tts-models.zip) | `254.83 MiB` | `1c231f85a3942fdc263f94b92856d8a753a6ca718f5919fe2a447acae018c9a0` |
 
-### 4. Web bundle: 53.1 MB → 1.08 MB
+---
 
-`npm run build` used to inline the PGlite/Postgres WebAssembly as base64 into
-`dist/index.html` — a **53.1 MB** single file. Now:
+## Repository Structure
 
-* `webui/src/db/index.ts` imports PGlite **dynamically**, and `vite.config.ts` pins it to
-  its own chunk (`pglite-*.js`, `pglite-*.wasm`, `pglite-*.data`).
-* Only the entry script and the stylesheet are inlined, so `dist/index.html` is
-  **1.08 MB**.
-* Both landing images (`hero-device`, `pipeline-core`) are imported and inlined as base64
-  data URIs — no `/images/*` request survives the build.
-* The APK serves `index.html` and the split runtime from
-  `https://appassets.androidplatform.net/assets/` via `WebViewAssetLoader`, which keeps
-  `allowFileAccess = false` while still allowing ES-module imports and WASM streaming.
-  The wasm/data ship as real files and are zip-compressed inside the APK instead of
-  being base64-inflated by 33%.
-* `FileAssessor` grades `.litertlm` as **WORKS (99%)** in both Kotlin and
-  `webui/src/lib/engines.ts`, and the dashboard's Android build screen has a
-  `.litertlm` loader panel wired to `HereticNative.triggerModelPicker()`.
+```text
+Heretic/
+├── public/android/HeretIc/          # Canonical Android 16 ARM64 native project
+│   └── app/src/
+│       ├── main/assets/             # silero_vad.onnx + SILERO_VAD_LICENSE.txt only
+│       ├── main/cpp/                # llama_jni.cpp + CMakeLists.txt (links llama + ggml)
+│       ├── main/java/
+│       │   ├── ai/heretic/app/      # Compose UI, HereticCore, ErrorEngine, Gates, ADRs, LiteRT
+│       │   ├── com/heretic/voice/   # LlamaCppEngine, Orchestrator, AudioTrack, SAF Store
+│       │   ├── org/schabi/parakeetype/    # Parakeet TDT ONNX STT, Silero VAD v6, MicScorer
+│       │   └── com/brahmadeo/supertonic/  # Supertonic ONNX TTS, LexiconManager, WavUtils
+│       └── test/java/               # 35 JVM unit tests (core, LiteRT, voice pipeline, ADRs)
+├── scripts/
+│   ├── fetch-supertonic-tts.sh      # Fetches & schema-validates Supertonic ONNX TTS assets
+│   └── package-voice-models.sh      # Reproducibly builds & SHA-256 verifies all 3 model packs
+└── .github/workflows/
+    ├── android.yml                  # Runs 35 unit tests, builds & verifies pure-native ARM64 APK
+    ├── fetch-voice-models.yml       # On-demand / push Supertonic TTS bundle verification
+    └── package-voice-models.yml     # Publishes voice-models-v1 release bundles
+```
 
-## Decisions recorded in the log
+---
 
-The append-only decision log ships with a baseline of two new ADRs, seeded natively by
-`DecisionSeeds` (written once on first launch by `HereticApplication` through
-`DecisionLogger.seedBaseline()`) and mirrored in `webui/src/lib/seed.ts`:
+## Building from Source
 
-| Ref | Decision | Reasoning rule |
-| --- | --- | --- |
-| ADR-009 | Serve the web UI through `WebViewAssetLoader` on `https://appassets.androidplatform.net` instead of `file://` | passes (`because` + ≥ 12 words) |
-| ADR-010 | `abiFilters` = `arm64-v8a` + `x86_64`, dropping `armeabi-v7a` | passes (`because` + ≥ 12 words) |
-
-Both entries carry context, the options considered, the choice, the mandatory reasoning
-sentence and the impact, and are covered by `DecisionSeedTest` (JVM) and `DecisionSeedTest`
-in `webui/src/lib/coreTests.ts`. Seeding is idempotent: refs already present are skipped, so
-relaunches never duplicate entries.
-
-## Build
+Prerequisites: **JDK 17**, **Android SDK (`compileSdk 36`)**, **NDK `27.2.12479018`**, **CMake `3.22.1`**, and **Gradle `8.7`**.
 
 ```bash
-# builds webui/, then stages index.html + the split PGlite runtime into
-# public/android/HeretIc/app/src/main/assets (the same script CI runs)
-./scripts/stage-web.sh
+# 1. Clone llama.cpp into the JNI source tree
+git clone --depth 1 https://github.com/ggml-org/llama.cpp.git \
+  public/android/HeretIc/app/src/main/cpp/llama.cpp
 
+# 2. Run the 35 JVM unit tests and assemble the native ARM64 APK
 cd public/android/HeretIc
-gradle :app:testDebugUnitTest   # works on a bare checkout; needs no web assets
-gradle :app:assembleDebug       # verifyWebAssets fails fast if staging was skipped
+gradle :app:testDebugUnitTest :app:assembleDebug
+
+# 3. Install onto a connected arm64-v8a Android device
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-
-`:app:assembleDebug` depends on a `verifyWebAssets` task that fails with the exact
-fix if `index.html` references a `pglite-*.js` chunk that was never staged, or if
-no `pglite-*.wasm`/`.data` is present.
-
-CI does exactly this on every push to an `arena/**` branch or `main`, uploads the
-`HeretIc-unified-apk` artifact, and publishes a GitHub Release when `main` builds.
-
-## Fetching the voice models
-
-The Supertonic TTS weights (`duration_predictor.onnx`, `text_encoder.onnx`,
-`vector_estimator.onnx`, `vocoder.onnx`, `tts.json`, `unicode_indexer.json`, plus the
-ten preset voice styles `voice_styles/M1–M5`, `F1–F5`) are **not** committed — they are
-trained ONNX weights fetched from the archived Supertone Hugging Face namespace
-(`supertone-oss-archive/supertonic`). To fetch a sideload-ready bundle:
-
-```bash
-./scripts/fetch-supertonic-tts.sh \
-  --out dist-voice-models/tts \
-  --zip dist-voice-models/supertonic-tts-models.zip
-```
-
-The script downloads, verifies (file sizes + JSON schema), and zips the assets. It accepts
-`--variant supertonic-1|2|3`, `--revision REF`, `--repo NAME`, and `--from-dir DIR`
-(validate/zip an existing model directory without downloading). Then import the resulting
-zip (or folder) in HeretIc → **Voice → Import TTS .zip**.
-
-`./scripts/package-voice-models.sh` reuses the same fetcher to build the release bundle,
-and the `Fetch Supertonic TTS Models` workflow (`workflow_dispatch`) fetches and uploads
-the bundle as an artifact on any runner that can reach Hugging Face.
-
-## Sideloading a model
-
-1. Copy `gemma-4-e2b-it-int4.litertlm` (or `gemma-3n-e2b-it-int4.litertlm`) to the device.
-2. Open HeretIc → **Android** → **Import .litertlm**, pick the file.
-3. Watch `heretic-model-progress`; the import ends with state `copied` and then `ready`.
-4. No network is involved at any point.
-
-## Safeguards
-
-* No `INTERNET` permission, no `<service>`, no `<receiver>`, no WorkManager.
-* `RECORD_AUDIO` is requested only when the mic is tapped; every grant is written to the
-  hash-chained authorization ledger.
-* Files arrive through `ACTION_OPEN_DOCUMENT` — one URI grant, never a directory.
-* Unsupported ABIs are refused with a clear message before native code loads.

@@ -3,17 +3,17 @@
 # fetch-supertonic-tts.sh — fetch the Supertonic ONNX TTS assets required by the
 # HeretIc offline voice pipeline (Slot 3, `supertonic-tts-models.zip`).
 #
-# The official weights live in the archived Supertone Hugging Face namespace:
-#   - Supertonic 1: supertone-oss-archive/supertonic
-#   - Supertonic 2: supertone-oss-archive/supertonic-2
-#   - Supertonic 3: supertone-oss-archive/supertonic-3
+# Resolution order for default `supertonic-1`:
+#   1. Hugging Face `Supertone/supertonic`
+#   2. Hugging Face `supertone-oss-archive/supertonic`
+#   3. Verified SHA-256 release mirror on `rsv-op/Heretic` (`voice-models-v1`)
 #
 # Usage:
 #   ./scripts/fetch-supertonic-tts.sh \
 #       --out dist-voice-models/tts \
 #       --zip dist-voice-models/supertonic-tts-models.zip
 #
-# Writes (ready for HeretIc → Voice → "Import TTS .zip" / "Pick TTS folder"):
+# Writes (ready for Heretic -> Models -> "Import TTS .zip" / "Pick TTS Folder"):
 #   <out>/duration_predictor.onnx
 #   <out>/text_encoder.onnx
 #   <out>/vector_estimator.onnx
@@ -21,20 +21,6 @@
 #   <out>/tts.json
 #   <out>/unicode_indexer.json
 #   <out>/voice_styles/{M1..M5,F1..F5}.json
-#
-# Options:
-#   --out DIR        Output directory                       (default: ./supertonic-tts)
-#   --zip PATH       Zip the output to PATH                 (default: <out>.zip)
-#   --no-zip         Do not write a zip archive
-#   --variant NAME   supertonic-1 | supertonic-2 | supertonic-3   (default: supertonic-1)
-#   --revision REF   Pin a Hugging Face revision            (default: archived main)
-#   --repo NAME      Override the Hugging Face repo id
-#   --from-dir DIR   Validate + zip an existing model dir instead of downloading
-#   -h, --help       Show this help
-#
-# Environment:
-#   HF_ENDPOINT  Hugging Face endpoint (default https://huggingface.co; e.g. a mirror)
-#   HF_TOKEN     Token for gated/private repos (optional)
 set -euo pipefail
 
 VARIANT="supertonic-1"
@@ -45,9 +31,12 @@ REPO=""
 REVISION=""
 FROM_DIR=""
 
+MIRROR_ZIP_URL="https://github.com/rsv-op/Heretic/releases/download/voice-models-v1/supertonic-tts-models.zip"
+MIRROR_ZIP_SHA256="1c231f85a3942fdc263f94b92856d8a753a6ca718f5919fe2a447acae018c9a0"
+
 usage() {
   cat <<'USAGE'
-fetch-supertonic-tts.sh — fetch the Supertonic ONNX TTS assets for the HeretIc
+fetch-supertonic-tts.sh — fetch the Supertonic ONNX TTS assets for the Heretic
 offline voice pipeline (Slot 3).
 
 Usage:
@@ -58,7 +47,7 @@ Options:
   --zip PATH       Zip the output to PATH                    (default: <out>.zip)
   --no-zip         Do not write a zip archive
   --variant NAME   supertonic-1 | supertonic-2 | supertonic-3  (default: supertonic-1)
-  --revision REF   Pin a Hugging Face revision               (default: archived main)
+  --revision REF   Pin a Hugging Face revision               (default: main)
   --repo NAME      Override the Hugging Face repo id
   --from-dir DIR   Validate + zip an existing model dir instead of downloading
   -h, --help       Show this help
@@ -79,13 +68,29 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# --- resolve the archived Hugging Face repo + default revision --------------
+EXPLICIT_REPO="$REPO"
 case "$VARIANT" in
-  supertonic-1) REPO="${REPO:-supertone-oss-archive/supertonic}";       REVISION="${REVISION:-main}" ;;
-  supertonic-2) REPO="${REPO:-supertone-oss-archive/supertonic-2}";     REVISION="${REVISION:-main}" ;;
-  supertonic-3) REPO="${REPO:-supertone-oss-archive/supertonic-3}";     REVISION="${REVISION:-aefc6e32416a594460b32413efc49d7fe4ce6d46}" ;;
-  *) echo "Unknown variant: $VARIANT (use supertonic-1 | supertonic-2 | supertonic-3)" >&2; exit 2 ;;
+  supertonic-1)
+    CANDIDATE_REPOS=("Supertone/supertonic" "supertone-oss-archive/supertonic")
+    REVISION="${REVISION:-main}"
+    ;;
+  supertonic-2)
+    CANDIDATE_REPOS=("Supertone/supertonic-2" "supertone-oss-archive/supertonic-2")
+    REVISION="${REVISION:-main}"
+    ;;
+  supertonic-3)
+    CANDIDATE_REPOS=("Supertone/supertonic-3" "supertone-oss-archive/supertonic-3")
+    REVISION="${REVISION:-main}"
+    ;;
+  *)
+    echo "Unknown variant: $VARIANT (use supertonic-1 | supertonic-2 | supertonic-3)" >&2
+    exit 2
+    ;;
 esac
+
+if [ -n "$EXPLICIT_REPO" ]; then
+  CANDIDATE_REPOS=("$EXPLICIT_REPO")
+fi
 
 HF_ENDPOINT="${HF_ENDPOINT:-https://huggingface.co}"
 ONNX_FILES="duration_predictor.onnx text_encoder.onnx vector_estimator.onnx vocoder.onnx tts.json unicode_indexer.json"
@@ -101,18 +106,73 @@ if [ -n "${HF_TOKEN:-}" ]; then AUTH_HEADER=(-H "Authorization: Bearer $HF_TOKEN
 fetch() {
   local url="$1" dest="$2"
   echo ">>> Downloading $(basename "$dest") from $url"
-  curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 "${AUTH_HEADER[@]}" -o "$dest" "$url"
+  curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 "${AUTH_HEADER[@]}" -o "$dest" "$url"
+}
+
+try_download_from_hf_repo() {
+  local repo_id="$1"
+  local stage_dir="$2"
+  mkdir -p "$stage_dir/voice_styles"
+  for f in $ONNX_FILES; do
+    fetch "$HF_ENDPOINT/$repo_id/resolve/$REVISION/onnx/$f" "$stage_dir/$f" || return 1
+  done
+  for sid in $STYLE_IDS; do
+    fetch "$HF_ENDPOINT/$repo_id/resolve/$REVISION/voice_styles/$sid.json" "$stage_dir/voice_styles/$sid.json" || return 1
+  done
+  return 0
+}
+
+try_download_from_release_mirror() {
+  local stage_dir="$1"
+  local tmp_zip
+  tmp_zip="$(mktemp)"
+  echo ">>> Falling back to verified release mirror: $MIRROR_ZIP_URL"
+  if ! curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 -o "$tmp_zip" "$MIRROR_ZIP_URL"; then
+    rm -f "$tmp_zip"
+    return 1
+  fi
+  local actual_sha
+  actual_sha="$(sha256sum "$tmp_zip" | awk '{print $1}')"
+  if [ "$actual_sha" != "$MIRROR_ZIP_SHA256" ]; then
+    echo "ERROR: Mirror SHA-256 mismatch (expected $MIRROR_ZIP_SHA256, got $actual_sha)" >&2
+    rm -f "$tmp_zip"
+    return 1
+  fi
+  echo ">>> Verified mirror SHA-256: $actual_sha"
+  mkdir -p "$stage_dir"
+  unzip -q -o "$tmp_zip" -d "$stage_dir"
+  rm -f "$tmp_zip"
+  # Flatten onnx/ layout if archive preserved onnx/ subdirectory
+  if [ -d "$stage_dir/onnx" ]; then
+    mv -f "$stage_dir/onnx/"* "$stage_dir/"
+    rmdir "$stage_dir/onnx" 2>/dev/null || true
+  fi
+  return 0
 }
 
 mkdir -p "$OUT_DIR/voice_styles"
 
 if [ -z "$FROM_DIR" ]; then
-  for f in $ONNX_FILES; do
-    fetch "$HF_ENDPOINT/$REPO/resolve/$REVISION/onnx/$f" "$OUT_DIR/$f"
+  DOWNLOADED=0
+  for candidate in "${CANDIDATE_REPOS[@]}"; do
+    echo ">>> Trying Hugging Face repository: $candidate@$REVISION"
+    if try_download_from_hf_repo "$candidate" "$OUT_DIR"; then
+      DOWNLOADED=1
+      break
+    fi
+    echo ">>> Repository $candidate@$REVISION unavailable; trying next source..."
   done
-  for sid in $STYLE_IDS; do
-    fetch "$HF_ENDPOINT/$REPO/resolve/$REVISION/voice_styles/$sid.json" "$OUT_DIR/voice_styles/$sid.json"
-  done
+
+  if [ "$DOWNLOADED" -eq 0 ] && [ "$VARIANT" = "supertonic-1" ] && [ -z "$EXPLICIT_REPO" ]; then
+    if try_download_from_release_mirror "$OUT_DIR"; then
+      DOWNLOADED=1
+    fi
+  fi
+
+  if [ "$DOWNLOADED" -eq 0 ]; then
+    echo "ERROR: Unable to fetch Supertonic TTS assets for variant '$VARIANT'." >&2
+    exit 1
+  fi
 else
   echo ">>> Skipping download (--from-dir $FROM_DIR)"
 fi
