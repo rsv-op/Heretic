@@ -161,11 +161,30 @@ object DecisionSeeds {
             "speech fallback, and seamless modular activation of Parakeet STT, llama.cpp, LiteRT-LM, and Supertonic TTS.",
     )
 
+    val LITERT_DELEGATE_FALLBACK_CACHE = Decision(
+        ref = "ADR-013",
+        title = "Cache LiteRT 2.3.0 GPU delegate probe per install with 4-thread CPU fallback",
+        context = "litert-gpu:2.3.0 requires working OpenCL or Vulkan drivers, and emulators or certain Mali GPU " +
+            "drivers throw during delegate attachment instead of degrading gracefully.",
+        options = listOf(
+            "runCatching GPU probe -> setNumThreads(4) CPU fallback + TFL3 v3 check + per-install backend cache",
+            "Retry GPU delegate creation on every model load without caching",
+            "Disable litert-gpu:2.3.0 globally on all Android devices",
+        ),
+        choice = "runCatching GPU probe -> setNumThreads(4) CPU fallback + TFL3 v3 check + per-install backend cache",
+        reasoning = "We wrap LiteRT 2.3.0 GPU delegate creation in runCatching, verify the TFL3 v3 flatbuffer " +
+            "schema upfront, fall back to four CPU threads, and cache the resolved backend per install because " +
+            "emulators and Mali drivers that throw on OpenCL or Vulkan only pay one probe per install.",
+        impact = "Eliminates LiteRT GPU delegate startup crashes, guarantees four-thread XNNPACK CPU fallback, " +
+            "rejects mismatched flatbuffer schemas early, and skips repeated failing GPU probes across launches.",
+    )
+
     val ALL: List<Decision> = listOf(
         WEB_ASSET_LOADER,
         ABI_FILTERS,
         UNIFIED_VOICE_PIPELINE,
         NATIVE_VOICE_ASSISTANT_SHELL,
+        LITERT_DELEGATE_FALLBACK_CACHE,
     )
 
     /** Seeds whose ref is not already in the append-only log. */

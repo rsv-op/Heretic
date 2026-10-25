@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
@@ -91,14 +92,47 @@ object LiteRtLmModels {
  * com.google.ai.edge.litertlm:litertlm-android:0.18.0
  *
  * Weights are never bundled in the APK: they are streamed from a Storage Access
- * Framework URI into context.filesDir/models/ and loaded from there. No
- * INTERNET permission exists, so the runtime has no network path at all.
+ * Framework URI into context.filesDir/models/ and loaded from there. GPU delegate
+ * initialization is wrapped in `runCatching`, falls back to 4 CPU threads
+ * (`Backend.CPU(threadCount = 4)`), and caches the resolved backend once per install.
  */
-class LiteRtLmEngine(private val context: Context) {
+class LiteRtLmEngine(
+    private val context: Context,
+    private val backendStore: BackendPreferenceStore = SharedPreferencesBackendStore(context),
+) {
+    companion object {
+        private const val TAG = "LiteRtLmEngine"
+    }
 
     private val modelsDir: File = File(context.filesDir, "models").apply { mkdirs() }
     private var engine: Engine? = null
     private var loaded: LiteRtLmModelSpec? = null
+    private var lastBackendRecord: CachedBackendRecord? = null
+
+    val activeBackendLabel: String
+        get() = when (val rec = lastBackendRecord ?: cachedBackendRecord()) {
+            null -> "auto (GPU -> CPU 4 threads)"
+            else -> if (rec.backend == ResolvedLiteRtBackend.GPU) "GPU" else "CPU (${rec.cpuThreads} threads)"
+        }
+
+    fun cachedBackendRecord(): CachedBackendRecord? {
+        lastBackendRecord?.let { return it }
+        val stamp = LiteRtBackendResolver.computeInstallStamp(context)
+        val persisted = backendStore.read(LiteRtBackendResolver.NAMESPACE_LITERTLM) ?: return null
+        if (persisted.installStamp != stamp) return null
+        return CachedBackendRecord(
+            backend = persisted.backend,
+            installStamp = persisted.installStamp,
+            cpuThreads = persisted.cpuThreads,
+            probeNote = persisted.probeNote,
+            probedFromCache = true,
+        )
+    }
+
+    fun resetBackendCache() {
+        backendStore.clear(LiteRtBackendResolver.NAMESPACE_LITERTLM)
+        lastBackendRecord = null
+    }
 
     fun isArm64Device(): Boolean = LiteRtLmModels.abiSupported(Build.SUPPORTED_ABIS.toList())
 
@@ -218,8 +252,8 @@ class LiteRtLmEngine(private val context: Context) {
     }
 
     /**
-     * Boots the engine for [spec]. Blocking: call from a background dispatcher,
-     * initialize() takes seconds on a cold start.
+     * Boots the engine for [spec], probing `Backend.GPU()` once per install inside
+     * `runCatching` and falling back cleanly to `Backend.CPU(threadCount = 4)`.
      */
     @Throws(IOException::class)
     fun load(spec: LiteRtLmModelSpec): Engine {
@@ -233,16 +267,48 @@ class LiteRtLmEngine(private val context: Context) {
             throw IOException("MODEL MISSING: ${spec.fileName} is not in ${modelsDir.absolutePath}")
         }
         close()
-        val config = EngineConfig(
-            modelPath = modelFile(spec).absolutePath,
-            backend = Backend.CPU(),
-            cacheDir = context.cacheDir.path,
+        val path = modelFile(spec).absolutePath
+        val stamp = LiteRtBackendResolver.computeInstallStamp(context)
+
+        val (booted, record) = LiteRtBackendResolver.resolve(
+            namespace = LiteRtBackendResolver.NAMESPACE_LITERTLM,
+            installStamp = stamp,
+            store = backendStore,
+            cpuThreads = LiteRtBackendResolver.DEFAULT_CPU_THREADS,
+            createGpu = {
+                bootWithBackend(path, Backend.GPU())
+            },
+            createCpu = { threads ->
+                bootWithBackend(path, Backend.CPU(threadCount = threads))
+            },
         )
-        val booted = Engine(config)
-        booted.initialize()
+
         engine = booted
         loaded = spec
+        lastBackendRecord = record
+        Log.i(
+            TAG,
+            "Booted ${spec.fileName} on ${record.backend.wireName} " +
+                "(cached=${record.probedFromCache}, threads=${record.cpuThreads})",
+        )
         return booted
+    }
+
+    private fun bootWithBackend(modelPath: String, backend: Backend): Engine {
+        val candidate = Engine(
+            EngineConfig(
+                modelPath = modelPath,
+                backend = backend,
+                cacheDir = context.cacheDir.path,
+            )
+        )
+        try {
+            candidate.initialize()
+            return candidate
+        } catch (err: Throwable) {
+            runCatching { candidate.close() }
+            throw err
+        }
     }
 
     /** One blocking turn. Returns the reply text; call from a background dispatcher. */
@@ -266,14 +332,19 @@ class LiteRtLmEngine(private val context: Context) {
     fun statusJson(): JSONObject {
         val selected = defaultModel()
         val installed = installedModel()
+        val backendRecord = cachedBackendRecord()
         return JSONObject().apply {
             put("runtime", "com.google.ai.edge.litertlm:litertlm-android:0.18.0")
+            put("litertRuntime", "com.google.ai.edge.litert:litert:${LiteRtFlatbufferSchema.LITERT_RUNTIME_VERSION} + litert-gpu:${LiteRtFlatbufferSchema.LITERT_RUNTIME_VERSION}")
             put("requiredAbi", LiteRtLmModels.REQUIRED_ABI)
             put("abis", JSONArray(supportedAbis()))
             put("arm64", isArm64Device())
             put("totalRamMb", totalRamBytes() / LiteRtLmModels.MIB)
             put("modelsDir", modelsDir.absolutePath)
             put("freeMb", freeBytes() / LiteRtLmModels.MIB)
+            put("resolvedBackend", backendRecord?.backend?.wireName ?: JSONObject.NULL)
+            put("cpuFallbackThreads", backendRecord?.cpuThreads ?: LiteRtBackendResolver.DEFAULT_CPU_THREADS)
+            put("backendCachedPerInstall", backendRecord?.probedFromCache ?: false)
             put("defaultModel", selected?.id ?: JSONObject.NULL)
             put("defaultFile", selected?.fileName ?: JSONObject.NULL)
             put("loadedModel", loaded?.id ?: JSONObject.NULL)
