@@ -13,8 +13,8 @@ android {
         applicationId = "ai.heretic.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 30
-        versionName = "3.0.0-native-voice-assistant"
+        versionCode = 31
+        versionName = "3.1.0-native-voice-assistant"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -75,7 +75,7 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("onnx", "gguf", "litertlm")
+        noCompress += listOf("onnx", "gguf", "litertlm", "tflite", "task")
     }
 
     packaging {
@@ -103,6 +103,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     // ---- On-device inference (100% offline, zero network) ----------------
+    // Declare both com.google.ai.edge.litert:litert:2.3.0 and litert-gpu:2.3.0
     implementation(libs.litert)
     implementation(libs.litert.gpu)
     implementation(libs.litertlm.android)

@@ -522,7 +522,7 @@ private fun ModelsStudioScreen(
                             enabled = !uiState.isBusy,
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Pick .litertlm", maxLines = 1)
+                            Text("Pick .litertlm / .tflite", maxLines = 1)
                         }
                     }
                 }
@@ -538,6 +538,17 @@ private fun ModelsStudioScreen(
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                     )
+                }
+                Text(
+                    text = uiState.tfliteSummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                TextButton(
+                    onClick = { voicePipeline.resetLiteRtBackendCache() },
+                    enabled = !uiState.isBusy,
+                ) {
+                    Text("Reset Cached LiteRT GPU/CPU Backend Probe", fontFamily = FontFamily.Monospace)
                 }
             }
         }

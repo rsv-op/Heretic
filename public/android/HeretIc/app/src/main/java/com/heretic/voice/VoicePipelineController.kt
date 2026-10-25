@@ -13,6 +13,7 @@ import ai.heretic.app.core.HereticCore
 import ai.heretic.app.core.MilestoneItem
 import ai.heretic.app.core.MilestoneKind
 import ai.heretic.app.core.SolutionConfirmation
+import ai.heretic.app.ml.LiteRtEngine
 import ai.heretic.app.ml.LiteRtLmEngine
 import ai.heretic.app.ml.LiteRtLmModels
 import ai.heretic.app.voice.VoiceManager
@@ -53,6 +54,7 @@ data class VoicePipelineUiState(
     val llmNeuralActive: Boolean = false,
     val liteRtActive: Boolean = false,
     val liteRtModelLabel: String = "",
+    val tfliteSummary: String = "LiteRT 2.3.0 + litert-gpu 2.3.0 ready (TFL3 v3 · GPU -> setNumThreads(4) cached per install)",
     val ttsNeuralActive: Boolean = false,
     val isListening: Boolean = false,
     val isPlaying: Boolean = false,
@@ -104,6 +106,7 @@ class VoicePipelineController(
     private val core: HereticCore? = null,
     private val platformVoice: VoiceManager? = null,
     private val liteRtEngine: LiteRtLmEngine? = null,
+    private val tfliteEngine: LiteRtEngine? = null,
     private val onRequestRecordPermission: (() -> Unit)? = null,
     private val onStateBroadcast: ((VoicePipelineUiState) -> Unit)? = null,
 ) {
@@ -154,6 +157,8 @@ class VoicePipelineController(
             VoicePipelineUiState(
                 paths = initialPaths,
                 readiness = initialReadiness,
+                tfliteSummary = tfliteEngine?.statusSummary()
+                    ?: "LiteRT 2.3.0 + litert-gpu 2.3.0 ready (TFL3 v3 · GPU -> setNumThreads(4) cached per install)",
                 voiceSpeed = savedSpeed,
                 diffusionSteps = savedSteps,
                 availableStyles = styles,
@@ -190,7 +195,7 @@ class VoicePipelineController(
                 mutateState {
                     it.copy(
                         liteRtActive = true,
-                        liteRtModelLabel = installed.label,
+                        liteRtModelLabel = "${installed.label} · ${engine.activeBackendLabel}",
                     )
                 }
             }
@@ -405,6 +410,10 @@ class VoicePipelineController(
     }
 
     fun importLiteRtLmUri(uri: Uri, displayName: String) {
+        if (displayName.lowercase().let { it.endsWith(".tflite") || it.endsWith(".task") }) {
+            importTfliteUri(uri, displayName)
+            return
+        }
         val engine = liteRtEngine ?: return
         val spec = LiteRtLmModels.byFileName(displayName)
         if (spec == null) {
@@ -434,8 +443,8 @@ class VoicePipelineController(
                                 s.copy(
                                     isBusy = false,
                                     liteRtActive = true,
-                                    liteRtModelLabel = spec.label,
-                                    statusMessage = "Activated ${spec.label} on LiteRT-LM 0.18.0.",
+                                    liteRtModelLabel = "${spec.label} · ${engine.activeBackendLabel}",
+                                    statusMessage = "Activated ${spec.label} on LiteRT-LM 0.18.0 (${engine.activeBackendLabel}).",
                                 )
                             }
                         },
@@ -457,6 +466,61 @@ class VoicePipelineController(
                         )
                     }
                 },
+            )
+        }
+    }
+
+    fun importTfliteUri(uri: Uri, displayName: String) {
+        val engine = tfliteEngine ?: return
+        mutateState { it.copy(isBusy = true, statusMessage = "Validating TFL3 v3 FlatBuffer & importing $displayName...") }
+        scope.launch(Dispatchers.IO) {
+            val imported = runCatching { engine.copyUriToModelsDir(uri) }
+            imported.fold(
+                onSuccess = { file ->
+                    val loaded = runCatching { engine.loadFile(file) }
+                    loaded.fold(
+                        onSuccess = { record ->
+                            val summary = engine.statusSummary()
+                            mutateState { s ->
+                                s.copy(
+                                    isBusy = false,
+                                    tfliteSummary = summary,
+                                    statusMessage = "LiteRT 2.3.0 loaded ${file.name} on ${engine.activeBackendLabel} " +
+                                        "(cached=${record.probedFromCache}).",
+                                )
+                            }
+                        },
+                        onFailure = { err ->
+                            mutateState { s ->
+                                s.copy(
+                                    isBusy = false,
+                                    tfliteSummary = engine.statusSummary(),
+                                    statusMessage = "LiteRT 2.3.0 compile failed: ${err.message}",
+                                )
+                            }
+                        },
+                    )
+                },
+                onFailure = { err ->
+                    mutateState { s ->
+                        s.copy(
+                            isBusy = false,
+                            statusMessage = "LiteRT FlatBuffer validation failed: ${err.message}",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun resetLiteRtBackendCache() {
+        tfliteEngine?.resetBackendCache()
+        liteRtEngine?.resetBackendCache()
+        mutateState {
+            it.copy(
+                tfliteSummary = tfliteEngine?.statusSummary()
+                    ?: "LiteRT 2.3.0 backend cache cleared — GPU delegate will re-probe once on next load.",
+                statusMessage = "Cleared cached LiteRT GPU/CPU backend — next load will probe GPU once and fall back to setNumThreads(4).",
             )
         }
     }
@@ -927,6 +991,7 @@ class VoicePipelineController(
             appendLine("ACTIVE STT   -> ${snap.activeSttLabel}")
             appendLine("ACTIVE BRAIN -> ${snap.activeBrainLabel}")
             appendLine("ACTIVE TTS   -> ${snap.activeTtsLabel}")
+            appendLine("LITERT 2.3.0 -> ${snap.tfliteSummary}")
             appendLine("SILERO VAD   -> Bundled in APK assets/silero_vad.onnx (v6)")
             appendLine("PRIVACY      -> INTERNET permission = false · Background services = 0")
             append("GATE LEDGER  -> ${if (brokenIdx == -1) "SHA-256 chain intact" else "Broken at $brokenIdx"}")

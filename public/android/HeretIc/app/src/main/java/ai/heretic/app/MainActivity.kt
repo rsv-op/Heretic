@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import ai.heretic.app.core.FileAssessment
 import ai.heretic.app.core.HereticCore
+import ai.heretic.app.ml.LiteRtEngine
 import ai.heretic.app.ml.LiteRtLmEngine
 import ai.heretic.app.ui.HereticApp
 import ai.heretic.app.ui.HereticTheme
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
                 val core = remember { HereticCore(applicationContext) }
                 val voice = remember { VoiceManager(this) }
                 val liteRtEngine = remember { LiteRtLmEngine(applicationContext) }
+                val tfliteEngine = remember { LiteRtEngine(applicationContext) }
                 var assessedSafFile by remember { mutableStateOf<FileAssessment?>(null) }
 
                 val micLauncherRef = remember { java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null) }
@@ -55,6 +57,7 @@ class MainActivity : ComponentActivity() {
                         core = core,
                         platformVoice = voice,
                         liteRtEngine = liteRtEngine,
+                        tfliteEngine = tfliteEngine,
                         onRequestRecordPermission = { micLauncherRef.get()?.invoke() },
                     )
                 }
@@ -130,6 +133,8 @@ class MainActivity : ComponentActivity() {
                         when {
                             lower.endsWith(".gguf") -> voicePipeline.importGgufUri(it)
                             lower.endsWith(".litertlm") -> voicePipeline.importLiteRtLmUri(it, name)
+                            lower.endsWith(".tflite") || lower.endsWith(".task") ->
+                                voicePipeline.importTfliteUri(it, name)
                             lower.endsWith(".zip") && (lower.contains("parakeet") || lower.contains("stt")) ->
                                 voicePipeline.importModelArchiveUri(it, "stt")
                             lower.endsWith(".zip") && (lower.contains("supertonic") || lower.contains("tts")) ->
@@ -143,6 +148,7 @@ class MainActivity : ComponentActivity() {
                         voicePipeline.shutdown()
                         voice.shutdown()
                         liteRtEngine.close()
+                        tfliteEngine.close()
                     }
                 }
 

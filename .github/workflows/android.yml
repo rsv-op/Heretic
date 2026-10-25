@@ -58,6 +58,9 @@ jobs:
           fail=0
           for needle in \
             "assets/silero_vad.onnx" \
+            "lib/arm64-v8a/libLiteRt.so" \
+            "lib/arm64-v8a/liblitert_jni.so" \
+            "lib/arm64-v8a/libLiteRtClGlAccelerator.so" \
             "lib/arm64-v8a/liblitertlm" \
             "lib/arm64-v8a/libllama_jni.so" \
             "lib/arm64-v8a/libonnxruntime.so"; do
