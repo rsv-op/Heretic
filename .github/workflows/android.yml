@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - arena/150cc900-heretic
       - "arena/**"
   workflow_dispatch:
 
@@ -13,7 +12,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Bundle Web UI & Assemble HeretIc APK
+    name: Assemble Native Heretic Voice Assistant APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -23,14 +22,6 @@ jobs:
         run: |
           rm -rf public/android/HeretIc/app/src/main/cpp/llama.cpp
           git clone --depth 1 https://github.com/ggml-org/llama.cpp.git public/android/HeretIc/app/src/main/cpp/llama.cpp
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Build single-file web UI and copy to Android assets
-        run: ./scripts/stage-web.sh
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -51,22 +42,21 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Run Unit Tests & Assemble APK
+      - name: Run Unit Tests & Assemble Native Voice Assistant APK
         working-directory: public/android/HeretIc
         run: |
           set -o pipefail
           (gradle :app:testDebugUnitTest --no-daemon --stacktrace && gradle :app:assembleDebug --no-daemon --stacktrace) 2>&1 | tee "$RUNNER_TEMP/gradle.log"
+          cp app/build/outputs/apk/debug/app-debug.apk ../../../Heretic-Voice-Assistant.apk
           cp app/build/outputs/apk/debug/app-debug.apk ../../../HeretIc.apk
 
-      - name: Verify packaged web bundle and unified ARM64 native libs
+      - name: Verify pure native APK (no WebUI) and ARM64 JNI libraries
         working-directory: public/android/HeretIc
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
           unzip -l "$APK" > "$RUNNER_TEMP/apk.txt"
           fail=0
           for needle in \
-            "assets/index.html" \
-            "assets/pglite-" \
             "assets/silero_vad.onnx" \
             "lib/arm64-v8a/liblitertlm" \
             "lib/arm64-v8a/libllama_jni.so" \
@@ -78,14 +68,12 @@ jobs:
               fail=1
             fi
           done
-          if grep -q "lib/x86_64/" "$RUNNER_TEMP/apk.txt" || grep -q "lib/armeabi-v7a/" "$RUNNER_TEMP/apk.txt"; then
-            echo "::error title=Unexpected ABI packaged::APK must contain arm64-v8a native libraries exclusively"
+          if grep -q "assets/index.html" "$RUNNER_TEMP/apk.txt" || grep -q "assets/pglite-" "$RUNNER_TEMP/apk.txt"; then
+            echo "::error title=WebUI packaged unexpectedly::Final APK must be pure native Jetpack Compose without assets/index.html"
             fail=1
           fi
-          HTML_BYTES=$(unzip -p "$APK" assets/index.html | wc -c)
-          echo "index.html inside the APK: $HTML_BYTES bytes"
-          if [ "$HTML_BYTES" -gt 4000000 ]; then
-            echo "::error title=Web bundle regressed::assets/index.html is $HTML_BYTES bytes; the PGlite runtime is being inlined again"
+          if grep -q "lib/x86_64/" "$RUNNER_TEMP/apk.txt" || grep -q "lib/armeabi-v7a/" "$RUNNER_TEMP/apk.txt"; then
+            echo "::error title=Unexpected ABI packaged::APK must contain arm64-v8a native libraries exclusively"
             fail=1
           fi
           exit $fail
@@ -95,7 +83,7 @@ jobs:
         working-directory: public/android/HeretIc
         run: |
           python3 - <<'PY'
-          import glob, os, re, subprocess, xml.etree.ElementTree as ET
+          import glob, os, subprocess, xml.etree.ElementTree as ET
           total = failures = errors = skipped = 0
           suites = []
           for path in glob.glob("app/build/test-results/testDebugUnitTest/*.xml"):
@@ -134,15 +122,17 @@ jobs:
           print(f"::error title=Gradle build failed::{msg}")
           PY
 
-      - name: Upload Downloadable HeretIc.apk Artifact
+      - name: Upload Downloadable Heretic-Voice-Assistant.apk Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HeretIc-unified-apk
-          path: HeretIc.apk
+          name: Heretic-Voice-Assistant-apk
+          path: |
+            Heretic-Voice-Assistant.apk
+            HeretIc.apk
           retention-days: 30
 
   publish-release:
-    name: Publish APK to GitHub Releases
+    name: Publish Native Voice Assistant APK to GitHub Releases
     needs: build-apk
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -152,17 +142,17 @@ jobs:
       - name: Download built APK
         uses: actions/download-artifact@v4
         with:
-          name: HeretIc-unified-apk
+          name: Heretic-Voice-Assistant-apk
 
-      - name: Create GitHub Release with the APK attached
+      - name: Create GitHub Release with Heretic-Voice-Assistant.apk attached
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="apk-run-${{ github.run_number }}"
-          if ! gh release create "$TAG" HeretIc.apk \
-            --title "HeretIc Unified Voice APK (build ${{ github.run_number }})" \
-            --notes "Unified Android 16 ARM64 APK integrating WebUI + PGlite + LiteRT-LM + llama.cpp JNI + Parakeet TDT STT + Silero VAD + Supertonic TTS + Low-Latency AudioTrack. Built from commit ${{ github.sha }} (run ${{ github.run_id }})." \
+          TAG="heretic-voice-assistant-v3.${{ github.run_number }}"
+          if ! gh release create "$TAG" Heretic-Voice-Assistant.apk HeretIc.apk \
+            --title "Heretic Voice Assistant Final Native APK (v3.${{ github.run_number }})" \
+            --notes "Pure Native Jetpack Compose **Heretic Voice Assistant** Android 16 ARM64 APK (zero WebView/WebUI). Includes built-in Silero VAD v6, out-of-the-box offline voice command execution across all 6 Heretic workflows (Assistant, Error Loop, File Assessor, Repo Milestones, SHA-256 Authorization Gates, and ADR Decision Log), plus modular neural activation for Parakeet TDT STT, llama.cpp JNI GGUF, LiteRT-LM, and Supertonic ONNX TTS with instant \`shaz\` / VAD AudioTrack barge-in. Built from commit ${{ github.sha }}." \
             --latest 2> release.err; then
             cat release.err
             echo "::error title=Release failed::$(tr '\n' ' ' < release.err | cut -c1-900)"

@@ -5,6 +5,7 @@ import android.util.Log
 import com.brahmadeo.supertonic.tts.SupertonicTTS
 import com.brahmadeo.supertonic.tts.utils.LexiconManager
 import com.brahmadeo.supertonic.tts.utils.TextNormalizer
+import com.brahmadeo.supertonic.tts.utils.WavUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,15 +25,25 @@ import org.schabi.parakeetype.audio.SpeechEndpointer
 import org.schabi.parakeetype.inference.InferenceRepository
 import org.schabi.parakeetype.inference.ParakeetEngine
 import org.schabi.parakeetype.inference.TranscriptResult
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
+
+data class NeuralBootSummary(
+    val sttLoaded: Boolean,
+    val llmLoaded: Boolean,
+    val ttsLoaded: Boolean,
+) {
+    val anyLoaded: Boolean get() = sttLoaded || llmLoaded || ttsLoaded
+    val allLoaded: Boolean get() = sttLoaded && llmLoaded && ttsLoaded
+}
 
 class UnifiedVoiceOrchestrator(
     private val context: Context,
     private val sttModelDir: File,
     private val ttsModelDir: File,
     private val llamaModelPath: String,
-    private val voiceStylePath: String,
+    @Volatile var voiceStylePath: String,
     val audioPlayer: PcmStreamingAudioPlayer = PcmStreamingAudioPlayer(),
     private val autoPlayAudioTrack: Boolean = true,
 ) {
@@ -46,8 +57,6 @@ class UnifiedVoiceOrchestrator(
         private const val DEFAULT_ORT_THREADS = 4
         private const val DEFAULT_XNN_THREADS = 1
         private const val TTS_LANG = "en"
-        private const val TTS_SPEED = 1.05f
-        private const val TTS_STEPS = 5
         private const val TTS_GAIN = 2.5f
         private const val TTS_SIBILANCE_MODE = 1
 
@@ -64,6 +73,7 @@ class UnifiedVoiceOrchestrator(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val pipelineMutex = Mutex()
     private val generationCounter = AtomicLong(0L)
+    private val lastAudioLock = Any()
 
     private val textNormalizer = TextNormalizer()
     private val captureManager = AudioCaptureManager(appContext)
@@ -72,10 +82,31 @@ class UnifiedVoiceOrchestrator(
     private val llamaEngine = LlamaCppEngine()
 
     @Volatile
+    var voiceSpeed: Float = 1.05f
+
+    @Volatile
+    var diffusionSteps: Int = 5
+
+    @Volatile
+    var sttLoaded: Boolean = false
+        private set
+
+    @Volatile
+    var llmLoaded: Boolean = false
+        private set
+
+    @Volatile
+    var ttsLoaded: Boolean = false
+        private set
+
+    @Volatile
     private var isSynthesizing = false
 
     @Volatile
     private var isShutdown = false
+
+    private var lastTurnPcm: ByteArray? = null
+    private var lastTurnSampleRate: Int = 44_100
 
     private var captureJob: Job? = null
     private var currentGenJob: Job? = null
@@ -86,50 +117,90 @@ class UnifiedVoiceOrchestrator(
     val isListening: Boolean
         get() = captureJob?.isActive == true
 
-    suspend fun init(): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * Modular initializer: loads whichever of Parakeet TDT STT, Supertonic ONNX TTS, and
+     * `llama.cpp` GGUF have valid model files on disk so each engine works independently.
+     */
+    suspend fun initModular(readiness: VoiceModelReadiness): NeuralBootSummary = withContext(Dispatchers.IO) {
         check(!isShutdown) { "UnifiedVoiceOrchestrator has already been shut down" }
 
         LexiconManager.load(appContext)
 
-        val sttReady = try {
-            if (!parakeetEngine.isLoaded) {
-                parakeetEngine.load(sttModelDir)
+        sttLoaded = if (readiness.sttReady) {
+            try {
+                if (!parakeetEngine.isLoaded) {
+                    parakeetEngine.load(sttModelDir)
+                }
+                parakeetEngine.isLoaded
+            } catch (e: Exception) {
+                Log.e(TAG, "ParakeetEngine failed to load from ${sttModelDir.absolutePath}", e)
+                false
             }
-            parakeetEngine.isLoaded
-        } catch (e: Exception) {
-            Log.e(TAG, "ParakeetEngine failed to load from ${sttModelDir.absolutePath}", e)
+        } else {
             false
         }
 
-        val libPath = File(appContext.applicationInfo.nativeLibraryDir, "libonnxruntime.so").absolutePath
-        val ttsReady = SupertonicTTS.initialize(
-            ttsModelDir.absolutePath,
-            libPath,
-            DEFAULT_ORT_THREADS,
-            DEFAULT_XNN_THREADS
-        )
-        if (!ttsReady) {
-            Log.e(TAG, "SupertonicTTS failed to initialize from ${ttsModelDir.absolutePath}")
+        ttsLoaded = if (readiness.ttsReady && readiness.styleReady) {
+            val libPath = File(appContext.applicationInfo.nativeLibraryDir, "libonnxruntime.so").absolutePath
+            val ok = SupertonicTTS.initialize(
+                ttsModelDir.absolutePath,
+                libPath,
+                DEFAULT_ORT_THREADS,
+                DEFAULT_XNN_THREADS,
+            )
+            if (!ok) {
+                Log.e(TAG, "SupertonicTTS failed to initialize from ${ttsModelDir.absolutePath}")
+            }
+            ok
+        } else {
+            false
         }
 
-        val llmReady = llamaEngine.load(
-            modelPath = llamaModelPath,
-            nThreads = DEFAULT_LLAMA_THREADS,
-            nCtx = DEFAULT_LLAMA_CTX
-        )
-        if (!llmReady) {
-            Log.e(TAG, "LlamaCppEngine failed to load model from $llamaModelPath")
+        llmLoaded = if (readiness.llmReady) {
+            val ok = llamaEngine.load(
+                modelPath = llamaModelPath,
+                nThreads = DEFAULT_LLAMA_THREADS,
+                nCtx = DEFAULT_LLAMA_CTX,
+            )
+            if (!ok) {
+                Log.e(TAG, "LlamaCppEngine failed to load model from $llamaModelPath")
+            }
+            ok
+        } else {
+            false
         }
 
-        sttReady && ttsReady && llmReady
+        NeuralBootSummary(
+            sttLoaded = sttLoaded,
+            llmLoaded = llmLoaded,
+            ttsLoaded = ttsLoaded,
+        )
     }
 
-    fun startListening(
-        onFinalTranscript: (String) -> Unit,
-        onTtsChunk: (ByteArray) -> Unit = {},
+    suspend fun init(): Boolean {
+        val readiness = VoiceModelConfigStore.validate(
+            VoiceModelPaths(
+                llamaModelPath = llamaModelPath,
+                sttModelDir = sttModelDir.absolutePath,
+                ttsModelDir = ttsModelDir.absolutePath,
+                voiceStylePath = voiceStylePath,
+            )
+        )
+        return initModular(readiness).allLoaded
+    }
+
+    /**
+     * Starts continuous hands-free Parakeet TDT + Silero VAD v6 capture.
+     * Invokes [onUtterance] on every finalized spoken transcript so the caller can route
+     * voice commands, `"shaz"` interrupts, or LLM turns uniformly.
+     */
+    fun startHandsFreeCapture(
+        onUtterance: (String) -> Unit,
+        onBargeIn: () -> Unit = {},
+        onError: (String) -> Unit = {},
     ) {
-        if (isShutdown) {
-            Log.w(TAG, "Ignoring startListening(): orchestrator is shut down")
+        if (isShutdown || !sttLoaded) {
+            onError("Parakeet TDT STT is not loaded")
             return
         }
 
@@ -147,6 +218,7 @@ class UnifiedVoiceOrchestrator(
                             if (isSpeaking) {
                                 Log.i(TAG, "VAD speech start detected during TTS playback; executing barge-in stop")
                                 stopPlayback()
+                                onBargeIn()
                             }
                         }
                         SpeechEndpointer.Event.EndOfSpeech,
@@ -163,22 +235,15 @@ class UnifiedVoiceOrchestrator(
                     when (result) {
                         is TranscriptResult.Final -> {
                             val userText = result.text.trim()
-                            if (userText.isBlank()) {
-                                return@collect
-                            }
-
-                            onFinalTranscript(userText)
-
+                            if (userText.isBlank()) return@collect
                             if (matchesStopKeyword(userText)) {
-                                Log.i(TAG, "Stop keyword '$STOP_KEYWORD' detected in transcript; halting playback")
                                 stopPlayback()
-                                return@collect
                             }
-
-                            runPipeline(userText, onTtsChunk)
+                            onUtterance(userText)
                         }
                         is TranscriptResult.Failure -> {
                             Log.w(TAG, "STT stream reported failure", result.cause)
+                            onError(result.cause.message ?: "STT inference failure")
                         }
                         else -> Unit
                     }
@@ -187,10 +252,26 @@ class UnifiedVoiceOrchestrator(
                 throw ce
             } catch (e: SecurityException) {
                 Log.e(TAG, "RECORD_AUDIO permission missing while starting audio capture", e)
+                onError("RECORD_AUDIO permission required")
             } catch (e: Exception) {
                 Log.e(TAG, "Unexpected exception inside STT listening loop", e)
+                onError(e.message ?: "Microphone capture error")
             }
         }
+    }
+
+    fun startListening(
+        onFinalTranscript: (String) -> Unit,
+        onTtsChunk: (ByteArray) -> Unit = {},
+    ) {
+        startHandsFreeCapture(
+            onUtterance = { userText ->
+                onFinalTranscript(userText)
+                if (!matchesStopKeyword(userText)) {
+                    speakPrompt(userText, onTtsChunk = onTtsChunk)
+                }
+            }
+        )
     }
 
     fun stopListening() {
@@ -200,13 +281,64 @@ class UnifiedVoiceOrchestrator(
     }
 
     /**
-     * Runs a text prompt directly through `llama.cpp` -> [SentenceStreamingBuffer] ->
-     * [SupertonicTTS] -> [PcmStreamingAudioPlayer] without requiring microphone input.
+     * Synthesizes and plays an already-computed reply (e.g. from `VoiceActionRouter`,
+     * `LiteRtLmEngine`, or `HereticCore`) via Supertonic ONNX -> AudioTrack if loaded,
+     * otherwise delegates to [fallbackSpeak].
+     */
+    fun speakDirectText(
+        text: String,
+        fallbackSpeak: (String) -> Unit = {},
+        onTtsChunk: (ByteArray) -> Unit = {},
+    ) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || isShutdown) return
+        if (!ttsLoaded) {
+            fallbackSpeak(trimmed)
+            return
+        }
+
+        val turnId = generationCounter.incrementAndGet()
+        llamaEngine.stop()
+        SupertonicTTS.setCancelled(true)
+        audioPlayer.stopImmediate()
+        currentGenJob?.cancel()
+
+        currentGenJob = scope.launch(Dispatchers.IO) {
+            pipelineMutex.withLock {
+                if (!currentCoroutineContext().isActive || generationCounter.get() != turnId) {
+                    return@withLock
+                }
+                isSynthesizing = true
+                val pcmCollector = ByteArrayOutputStream()
+                try {
+                    SupertonicTTS.reset()
+                    SupertonicTTS.setCancelled(false)
+                    synthesizeAndPlaySentence(trimmed, turnId, pcmCollector, onTtsChunk)
+                    val allBytes = pcmCollector.toByteArray()
+                    if (allBytes.isNotEmpty() && generationCounter.get() == turnId) {
+                        synchronized(lastAudioLock) {
+                            lastTurnPcm = allBytes
+                            lastTurnSampleRate = SupertonicTTS.getAudioSampleRate()
+                        }
+                    }
+                } finally {
+                    if (generationCounter.get() == turnId) {
+                        isSynthesizing = false
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Streams a conversational prompt through `llama.cpp` -> [SentenceStreamingBuffer] ->
+     * Supertonic ONNX TTS (or [fallbackSpeakSentence] when Supertonic isn't loaded yet).
      */
     fun speakPrompt(
         prompt: String,
         onAssistantSentence: (String) -> Unit = {},
         onTtsChunk: (ByteArray) -> Unit = {},
+        fallbackSpeakSentence: (String) -> Unit = {},
     ) {
         val trimmed = prompt.trim()
         if (trimmed.isEmpty() || isShutdown) return
@@ -214,13 +346,14 @@ class UnifiedVoiceOrchestrator(
             stopPlayback()
             return
         }
-        runPipeline(trimmed, onTtsChunk, onAssistantSentence)
+        runLlamaPipeline(trimmed, onTtsChunk, onAssistantSentence, fallbackSpeakSentence)
     }
 
-    private fun runPipeline(
+    private fun runLlamaPipeline(
         prompt: String,
         onTtsChunk: (ByteArray) -> Unit,
-        onAssistantSentence: (String) -> Unit = {},
+        onAssistantSentence: (String) -> Unit,
+        fallbackSpeakSentence: (String) -> Unit,
     ) {
         val turnId = generationCounter.incrementAndGet()
 
@@ -236,9 +369,10 @@ class UnifiedVoiceOrchestrator(
                 }
 
                 isSynthesizing = true
+                val pcmCollector = ByteArrayOutputStream()
+
                 val sentenceBuffer = SentenceStreamingBuffer { sentence ->
                     if (!currentCoroutineContext().isActive ||
-                        SupertonicTTS.isCancelled() ||
                         generationCounter.get() != turnId
                     ) {
                         return@SentenceStreamingBuffer
@@ -246,42 +380,25 @@ class UnifiedVoiceOrchestrator(
 
                     onAssistantSentence(sentence)
 
-                    val normalized = textNormalizer.normalize(sentence, TTS_LANG, false).trim()
-                    if (normalized.isEmpty()) {
-                        return@SentenceStreamingBuffer
-                    }
-
-                    val audio = SupertonicTTS.generateAudio(
-                        text = normalized,
-                        lang = TTS_LANG,
-                        stylePath = voiceStylePath,
-                        speed = TTS_SPEED,
-                        steps = TTS_STEPS,
-                        gain = TTS_GAIN,
-                        sibilanceMode = TTS_SIBILANCE_MODE
-                    )
-
-                    if (audio != null &&
-                        audio.isNotEmpty() &&
-                        !SupertonicTTS.isCancelled() &&
-                        currentCoroutineContext().isActive &&
-                        generationCounter.get() == turnId
-                    ) {
-                        if (autoPlayAudioTrack) {
-                            audioPlayer.enqueueChunk(audio, SupertonicTTS.getAudioSampleRate())
+                    if (ttsLoaded) {
+                        if (!SupertonicTTS.isCancelled()) {
+                            synthesizeAndPlaySentence(sentence, turnId, pcmCollector, onTtsChunk)
                         }
-                        onTtsChunk(audio)
+                    } else {
+                        fallbackSpeakSentence(sentence)
                     }
                 }
 
                 try {
-                    SupertonicTTS.reset()
-                    SupertonicTTS.setCancelled(false)
+                    if (ttsLoaded) {
+                        SupertonicTTS.reset()
+                        SupertonicTTS.setCancelled(false)
+                    }
 
                     val pipelineJob = currentCoroutineContext()[Job]
                     llamaEngine.generate(prompt) { token ->
                         if (pipelineJob?.isActive == false ||
-                            SupertonicTTS.isCancelled() ||
+                            (ttsLoaded && SupertonicTTS.isCancelled()) ||
                             generationCounter.get() != turnId
                         ) {
                             false
@@ -289,17 +406,24 @@ class UnifiedVoiceOrchestrator(
                             runBlocking {
                                 sentenceBuffer.appendPiece(token)
                             }
-                            !SupertonicTTS.isCancelled() &&
+                            (!ttsLoaded || !SupertonicTTS.isCancelled()) &&
                                 pipelineJob?.isActive != false &&
                                 generationCounter.get() == turnId
                         }
                     }
 
                     if (currentCoroutineContext().isActive &&
-                        !SupertonicTTS.isCancelled() &&
+                        (!ttsLoaded || !SupertonicTTS.isCancelled()) &&
                         generationCounter.get() == turnId
                     ) {
                         sentenceBuffer.flush()
+                        val bytes = pcmCollector.toByteArray()
+                        if (bytes.isNotEmpty()) {
+                            synchronized(lastAudioLock) {
+                                lastTurnPcm = bytes
+                                lastTurnSampleRate = SupertonicTTS.getAudioSampleRate()
+                            }
+                        }
                     } else {
                         sentenceBuffer.clear()
                     }
@@ -316,6 +440,48 @@ class UnifiedVoiceOrchestrator(
                 }
             }
         }
+    }
+
+    private fun synthesizeAndPlaySentence(
+        sentence: String,
+        turnId: Long,
+        pcmCollector: ByteArrayOutputStream,
+        onTtsChunk: (ByteArray) -> Unit,
+    ) {
+        val withLexicon = LexiconManager.apply(sentence)
+        val normalized = textNormalizer.normalize(withLexicon, TTS_LANG, false).trim()
+        if (normalized.isEmpty()) return
+
+        val audio = SupertonicTTS.generateAudio(
+            text = normalized,
+            lang = TTS_LANG,
+            stylePath = voiceStylePath,
+            speed = voiceSpeed.coerceIn(0.75f, 1.5f),
+            steps = diffusionSteps.coerceIn(2, 10),
+            gain = TTS_GAIN,
+            sibilanceMode = TTS_SIBILANCE_MODE,
+        )
+
+        if (audio != null &&
+            audio.isNotEmpty() &&
+            !SupertonicTTS.isCancelled() &&
+            generationCounter.get() == turnId
+        ) {
+            pcmCollector.write(audio)
+            if (autoPlayAudioTrack) {
+                audioPlayer.enqueueChunk(audio, SupertonicTTS.getAudioSampleRate())
+            }
+            onTtsChunk(audio)
+        }
+    }
+
+    fun exportLastWav(destFile: File): Result<File> = runCatching {
+        val (pcm, sr) = synchronized(lastAudioLock) {
+            val data = lastTurnPcm ?: error("Synthesize at least one Supertonic TTS reply before exporting WAV")
+            data to lastTurnSampleRate
+        }
+        WavUtils.saveWav(destFile, pcm, sampleRate = sr)
+        destFile
     }
 
     fun stopPlayback() {
@@ -359,6 +525,6 @@ class UnifiedVoiceOrchestrator(
     private fun newSpeechEndpointer(): SpeechEndpointer =
         SpeechEndpointer(
             silenceMs = ENDPOINTER_SILENCE_MS,
-            minimumLengthMs = ENDPOINTER_MIN_LENGTH_MS
+            minimumLengthMs = ENDPOINTER_MIN_LENGTH_MS,
         )
 }
