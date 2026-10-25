@@ -1,15 +1,13 @@
-webui/node_modules/
-webui/dist/
-webui/tsconfig.tsbuildinfo
-
-# Split PGlite runtime: produced by `npm run build` and staged by CI, never committed.
-public/android/HeretIc/app/src/main/assets/*.js
-public/android/HeretIc/app/src/main/assets/*.wasm
-public/android/HeretIc/app/src/main/assets/*.data
-
+# Native build outputs & ephemeral CI checkouts
 public/android/HeretIc/build/
 public/android/HeretIc/app/build/
 public/android/HeretIc/app/.cxx/
 public/android/HeretIc/.gradle/
 public/android/HeretIc/app/src/main/cpp/llama.cpp/
+dist-voice-models/
 
+# Guard against accidental staging of legacy web runtime bundles
+public/android/HeretIc/app/src/main/assets/*.html
+public/android/HeretIc/app/src/main/assets/*.js
+public/android/HeretIc/app/src/main/assets/*.wasm
+public/android/HeretIc/app/src/main/assets/*.data
