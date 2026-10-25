@@ -101,65 +101,19 @@ echo "    Packaged Slot 2 archive: $STT_ZIP_OUT ($(du -h "$STT_ZIP_OUT" | awk '{
 
 # ==============================================================================
 # 3. Slot 3 — Supertonic ONNX TTS + 10 Speaker Voice Styles Bundle
+#    Fetched, verified and zipped by scripts/fetch-supertonic-tts.sh
+#    (archived Hugging Face namespace: supertone-oss-archive/supertonic)
 # ==============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TTS_STAGE="$WORK_DIR/tts"
-mkdir -p "$TTS_STAGE/voice_styles"
-
-SUPERTONIC_BASE="https://huggingface.co/Supertone/supertonic/resolve/main"
-
-for onnx_file in \
-  duration_predictor.onnx \
-  text_encoder.onnx \
-  vector_estimator.onnx \
-  vocoder.onnx \
-  tts.json \
-  unicode_indexer.json; do
-  fetch "$SUPERTONIC_BASE/onnx/$onnx_file" "$TTS_STAGE/$onnx_file"
-done
-
-for style_id in M1 M2 M3 M4 M5 F1 F2 F3 F4 F5; do
-  fetch "$SUPERTONIC_BASE/voice_styles/${style_id}.json" "$TTS_STAGE/voice_styles/${style_id}.json"
-done
-
-python3 - "$TTS_STAGE" <<'PY'
-import json, os, sys
-root = sys.argv[1]
-for onnx_name in ["duration_predictor.onnx", "text_encoder.onnx", "vector_estimator.onnx", "vocoder.onnx"]:
-    p = os.path.join(root, onnx_name)
-    sz = os.path.getsize(p)
-    if sz < 100_000:
-        raise SystemExit(f"Unexpectedly small Supertonic ONNX file {onnx_name}: {sz} bytes")
-    print(f"    Verified ONNX file {onnx_name} ({sz / 1048576:.2f} MiB)")
-
-with open(os.path.join(root, "tts.json"), "r", encoding="utf-8") as f:
-    cfg = json.load(f)
-assert "ae" in cfg and "ttl" in cfg, "tts.json missing ae/ttl keys"
-
-with open(os.path.join(root, "unicode_indexer.json"), "r", encoding="utf-8") as f:
-    idx = json.load(f)
-assert isinstance(idx, list) and len(idx) > 1000, "unicode_indexer.json invalid"
-
-for sid in ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"]:
-    sp = os.path.join(root, "voice_styles", f"{sid}.json")
-    with open(sp, "r", encoding="utf-8") as f:
-        st = json.load(f)
-    assert "style_ttl" in st and "style_dp" in st, f"{sid}.json missing style_ttl/style_dp"
-print("    Verified tts.json, unicode_indexer.json, and all 10 voice_styles/*.json")
-PY
-
 TTS_ZIP_OUT="$OUT_DIR/supertonic-tts-models.zip"
-rm -f "$TTS_ZIP_OUT"
-(
-  cd "$TTS_STAGE"
-  zip -0 -r -q "$TTS_ZIP_OUT" \
-    duration_predictor.onnx \
-    text_encoder.onnx \
-    vector_estimator.onnx \
-    vocoder.onnx \
-    tts.json \
-    unicode_indexer.json \
-    voice_styles
-)
+
+"$SCRIPT_DIR/fetch-supertonic-tts.sh" \
+  --variant supertonic-1 \
+  --out "$TTS_STAGE" \
+  --zip "$TTS_ZIP_OUT" \
+  | sed 's/^/    /'
+
 echo "    Packaged Slot 3 archive: $TTS_ZIP_OUT ($(du -h "$TTS_ZIP_OUT" | awk '{print $1}'))"
 
 # ==============================================================================
