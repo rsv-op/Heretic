@@ -243,6 +243,16 @@ private fun AssistantHomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     AssistChip(
+                        onClick = { voicePipeline.toggleWakeWordRequired() },
+                        label = {
+                            Text(
+                                text = uiState.activeWakeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        },
+                    )
+                    AssistChip(
                         onClick = onOpenModelsTab,
                         label = {
                             Text(
@@ -316,6 +326,7 @@ private fun AssistantHomeScreen(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             val quickCommands = listOf(
+                "Wake word" to "what is the wake word",
                 "System status" to "system status",
                 "Capabilities" to "what can you do",
                 "Repo progress" to "repo progress",

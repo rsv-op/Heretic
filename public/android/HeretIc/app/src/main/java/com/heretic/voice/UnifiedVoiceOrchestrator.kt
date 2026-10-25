@@ -49,7 +49,8 @@ class UnifiedVoiceOrchestrator(
 ) {
     companion object {
         private const val TAG = "UnifiedVoiceOrchestrator"
-        private const val STOP_KEYWORD = "shaz"
+        const val WAKE_KEYWORD = WakeWordDetector.WAKE_KEYWORD
+        const val STOP_KEYWORD = WakeWordDetector.STOP_KEYWORD
         private const val ENDPOINTER_SILENCE_MS = 1200L
         private const val ENDPOINTER_MIN_LENGTH_MS = 256L
         private const val DEFAULT_LLAMA_THREADS = 4
@@ -59,6 +60,10 @@ class UnifiedVoiceOrchestrator(
         private const val TTS_LANG = "en"
         private const val TTS_GAIN = 2.5f
         private const val TTS_SIBILANCE_MODE = 1
+
+        internal fun matchesWakeKeyword(transcript: String): Boolean {
+            return WakeWordDetector.matchesWakeWord(transcript)
+        }
 
         internal fun matchesStopKeyword(transcript: String): Boolean {
             val stripped = transcript.trim().trim { !it.isLetterOrDigit() }.trim()

@@ -17,14 +17,14 @@ import org.json.JSONObject
 import java.util.Locale
 
 /**
- * STT: Android SpeechRecognizer first, Vosk/Whisper-tiny int8 when the platform
- * recognizer is unavailable. TTS: platform TextToSpeech first, Piper voice bank
- * when no engine is installed. Audio never touches disk.
+ * On-device Android platform speech fallback (`SpeechRecognizer` with
+ * `EXTRA_PREFER_OFFLINE = true` + platform `TextToSpeech`) used whenever the
+ * optional neural `Parakeet TDT` STT or `Supertonic ONNX` TTS bundles have not
+ * yet been imported.
  *
- * Every SpeechRecognizer, TextToSpeech and listener callback is created and
- * driven on the main looper: the framework throws
- * "SpeechRecognizer should be used only from the main thread" and silently drops
- * TTS calls made from a WebView/JavascriptInterface thread otherwise.
+ * Every `SpeechRecognizer`, `TextToSpeech`, and listener callback is created and
+ * driven on the main looper because Android enforces main-thread ownership on
+ * `SpeechRecognizer`.
  */
 class VoiceManager(private val context: Context) {
 

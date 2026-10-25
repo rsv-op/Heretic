@@ -72,6 +72,81 @@ class VoicePipelineUnitTest {
     }
 
     @Test
+    fun `wake word detector parses Heretic wake phrases command prefixes and rejects unrelated words`() {
+        assertEquals(WakeWordDetector.ParseResult.WakeOnly, WakeWordDetector.parse("Heretic"))
+        assertEquals(WakeWordDetector.ParseResult.WakeOnly, WakeWordDetector.parse("Hey Heretic!"))
+        assertEquals(WakeWordDetector.ParseResult.WakeOnly, WakeWordDetector.parse("Wake up Heretic."))
+
+        assertEquals(
+            WakeWordDetector.ParseResult.WokeWithCommand("system status"),
+            WakeWordDetector.parse("Heretic, system status"),
+        )
+        assertEquals(
+            WakeWordDetector.ParseResult.WokeWithCommand("repo progress"),
+            WakeWordDetector.parse("Hey Heretic repo progress"),
+        )
+        assertEquals(
+            WakeWordDetector.ParseResult.ImmediateStop,
+            WakeWordDetector.parse("Heretic, shaz"),
+        )
+        assertEquals(
+            WakeWordDetector.ParseResult.Unprefixed("Heretical philosophy is ancient"),
+            WakeWordDetector.parse("Heretical philosophy is ancient"),
+        )
+        assertTrue(UnifiedVoiceOrchestrator.matchesWakeKeyword("Hey Heretic, verify gates"))
+        assertFalse(UnifiedVoiceOrchestrator.matchesWakeKeyword("Heretical"))
+    }
+
+    @Test
+    fun `wake word session gate blocks ambient hands-free chatter opens 20s window on Heretic and always passes shaz`() {
+        val gate = WakeWordSessionGate(wakeWordRequired = true, awakeWindowMs = 20_000L)
+
+        // 1. Ambient room chatter while asleep in hands-free mode is ignored
+        assertEquals(
+            WakeGateDecision.IgnoredAmbient,
+            gate.evaluate("pass the coffee please", fromHandsFreeStream = true, nowMs = 1_000L),
+        )
+
+        // 2. Stop word "shaz" ALWAYS bypasses standby gate
+        assertEquals(
+            WakeGateDecision.ImmediateStop,
+            gate.evaluate("shaz", fromHandsFreeStream = true, nowMs = 1_500L),
+        )
+
+        // 3. Speaking "Hey Heretic" opens the 20-second awake window
+        assertEquals(
+            WakeGateDecision.WakeAcknowledged,
+            gate.evaluate("Hey Heretic!", fromHandsFreeStream = true, nowMs = 2_000L),
+        )
+        assertTrue(gate.isAwake(nowMs = 10_000L))
+
+        // 4. Unprefixed follow-up inside the 20-second window executes and refreshes the window
+        assertEquals(
+            WakeGateDecision.Execute(command = "system status", wokeNow = false),
+            gate.evaluate("system status", fromHandsFreeStream = true, nowMs = 10_000L),
+        )
+
+        // 5. After 20s of silence (10_000 + 20_001 = 30_001), gate returns to standby
+        assertFalse(gate.isAwake(nowMs = 31_000L))
+        assertEquals(
+            WakeGateDecision.IgnoredAmbient,
+            gate.evaluate("background conversation", fromHandsFreeStream = true, nowMs = 31_000L),
+        )
+
+        // 6. Single-shot "Heretic, repo progress" wakes + strips prefix in one utterance
+        assertEquals(
+            WakeGateDecision.Execute(command = "repo progress", wokeNow = true),
+            gate.evaluate("Heretic, repo progress", fromHandsFreeStream = true, nowMs = 35_000L),
+        )
+
+        // 7. Push-to-talk / typed input executes even without wake word
+        assertEquals(
+            WakeGateDecision.Execute(command = "verify gates", wokeNow = false),
+            gate.evaluate("verify gates", fromHandsFreeStream = false, nowMs = 99_000L),
+        )
+    }
+
+    @Test
     fun `speech endpointer emits SpeechStart then EndOfSpeech on sustained silence`() {
         val endpointer = SpeechEndpointer(silenceMs = 640L, minimumLengthMs = 256L)
 
