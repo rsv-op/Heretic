@@ -119,6 +119,29 @@ no `pglite-*.wasm`/`.data` is present.
 CI does exactly this on every push to an `arena/**` branch or `main`, uploads the
 `HeretIc-unified-apk` artifact, and publishes a GitHub Release when `main` builds.
 
+## Fetching the voice models
+
+The Supertonic TTS weights (`duration_predictor.onnx`, `text_encoder.onnx`,
+`vector_estimator.onnx`, `vocoder.onnx`, `tts.json`, `unicode_indexer.json`, plus the
+ten preset voice styles `voice_styles/M1–M5`, `F1–F5`) are **not** committed — they are
+trained ONNX weights fetched from the archived Supertone Hugging Face namespace
+(`supertone-oss-archive/supertonic`). To fetch a sideload-ready bundle:
+
+```bash
+./scripts/fetch-supertonic-tts.sh \
+  --out dist-voice-models/tts \
+  --zip dist-voice-models/supertonic-tts-models.zip
+```
+
+The script downloads, verifies (file sizes + JSON schema), and zips the assets. It accepts
+`--variant supertonic-1|2|3`, `--revision REF`, `--repo NAME`, and `--from-dir DIR`
+(validate/zip an existing model directory without downloading). Then import the resulting
+zip (or folder) in HeretIc → **Voice → Import TTS .zip**.
+
+`./scripts/package-voice-models.sh` reuses the same fetcher to build the release bundle,
+and the `Fetch Supertonic TTS Models` workflow (`workflow_dispatch`) fetches and uploads
+the bundle as an artifact on any runner that can reach Hugging Face.
+
 ## Sideloading a model
 
 1. Copy `gemma-4-e2b-it-int4.litertlm` (or `gemma-3n-e2b-it-int4.litertlm`) to the device.

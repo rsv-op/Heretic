@@ -1,0 +1,61 @@
+name: Fetch Supertonic TTS Models
+
+# Runs the fetcher on demand (or on script change) and uploads the resulting
+# bundle as a workflow artifact, so the Supertonic ONNX TTS assets can be
+# downloaded from a machine that can reach Hugging Face.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Supertonic model variant'
+        required: true
+        default: 'supertonic-1'
+        type: choice
+        options:
+          - supertonic-1
+          - supertonic-2
+          - supertonic-3
+      revision:
+        description: 'Hugging Face revision (optional, defaults to archived main)'
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+      - 'arena/**'
+    paths:
+      - 'scripts/fetch-supertonic-tts.sh'
+      - '.github/workflows/fetch-voice-models.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-tts:
+    name: Fetch Supertonic TTS models (${{ github.event.inputs.variant || 'supertonic-1' }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch Supertonic TTS models
+        env:
+          VARIANT: ${{ github.event.inputs.variant || 'supertonic-1' }}
+          REVISION: ${{ github.event.inputs.revision }}
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/fetch-supertonic-tts.sh
+          args=(--variant "$VARIANT" --out dist-voice-models/tts --zip dist-voice-models/supertonic-tts-models.zip)
+          if [ -n "$REVISION" ]; then args+=(--revision "$REVISION"); fi
+          ./scripts/fetch-supertonic-tts.sh "${args[@]}"
+
+      - name: Upload TTS bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: supertonic-tts-models-${{ github.event.inputs.variant || 'supertonic-1' }}
+          path: |
+            dist-voice-models/supertonic-tts-models.zip
+            dist-voice-models/tts/
+          if-no-files-found: error
+          retention-days: 7
