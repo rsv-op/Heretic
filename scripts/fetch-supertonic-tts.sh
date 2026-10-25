@@ -100,6 +100,13 @@ if [ -n "$FROM_DIR" ]; then OUT_DIR="$FROM_DIR"; fi
 if [ -z "$OUT_DIR" ];    then OUT_DIR="$(pwd)/supertonic-tts"; fi
 if [ "$NO_ZIP" -eq 0 ] && [ -z "$ZIP_OUT" ]; then ZIP_OUT="$OUT_DIR.zip"; fi
 
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+if [ "$NO_ZIP" -eq 0 ] && [ -n "$ZIP_OUT" ]; then
+  mkdir -p "$(dirname "$ZIP_OUT")"
+  ZIP_OUT="$(cd "$(dirname "$ZIP_OUT")" && pwd)/$(basename "$ZIP_OUT")"
+fi
+
 AUTH_HEADER=()
 if [ -n "${HF_TOKEN:-}" ]; then AUTH_HEADER=(-H "Authorization: Bearer $HF_TOKEN"); fi
 
