@@ -1,61 +1,28 @@
-# HeretIc — unified offline Android build
+# Heretic Android 16 Native Module (`public/android/HeretIc`)
 
-One repository, two frontends, one brain.
+Canonical pure-native Android 16 (`compileSdk = 36`, `targetSdk = 36`, `minSdk = 26`, `arm64-v8a`) Gradle project for **Heretic Voice Assistant**.
 
-| Layer | Where | Notes |
-| --- | --- | --- |
-| Web command center | `dist/index.html` | React 19 + Vite 8 + Tailwind 4, single file (~1.08 MB); PGlite ships as split `.wasm`/`.data` assets |
-| Native UI fallback | `app/src/main/java/ai/heretic/app/ui/HereticApp.kt` | Jetpack Compose, same six workflows |
-| Brain | `core/HereticCore.kt` | Rule tables mirrored in `src/lib/engines.ts` |
-| Voice | `voice/VoiceManager.kt` | SpeechRecognizer + TextToSpeech, Vosk/Piper fallbacks |
-| Inference (`.tflite`) | `ml/LiteRtEngine.kt` | LiteRT 2.3.0 + litert-gpu 2.3.0 |
-| Inference (`.litertlm`) | `ml/LiteRtLmEngine.kt` | litertlm-android 0.18.0, Gemma 4 E2B default / Gemma 3n E2B fallback |
+## Voice Activation & Interrupt Contract
 
-## Build locally
+- **Wake Word — `"HERETIC"`**: Spoken alone (`"Heretic"`, `"Hey Heretic"`) or prefixed to any command (`"Heretic, system status"`), `WakeWordDetector` + `WakeWordSessionGate` wake hands-free Parakeet TDT capture, open a `20s` active follow-up window, and strip the wake prefix before routing to `VoiceActionRouter`, `llama.cpp`, `LiteRT-LM`, or `HereticCore`.
+- **Emergency Interrupt — `"SHAZ"`**: Saying `"shaz"` (or speaking over playback via embedded `Silero VAD v6`) bypasses standby and immediately pauses + flushes `PcmStreamingAudioPlayer` (`AudioTrack`), cancelling active LLM/TTS generation.
+
+## Architecture & Build Guarantees
+
+- **Zero Network & Zero Background Work**: `AndroidManifest.xml` declares only `android.permission.RECORD_AUDIO` — zero `INTERNET`, zero `<service>`, zero `<receiver>`, and Gradle excludes `androidx.work`.
+- **Zero WebUI (`verifyVoiceAssets`)**: Gradle task `verifyVoiceAssets` verifies `src/main/assets/silero_vad.onnx` exists and fails the build if any `index.html`, `.js`, `.css`, or `.wasm` file is placed in `assets/`.
+- **Native Runtimes**:
+  - `CMakeLists.txt` (`3.22.1`, NDK `27.2.12479018`, 16 KB ELF page alignment) compiles `llama_jni.cpp` linked against `llama` + `ggml` (`GGML_OPENMP=OFF`, `GGML_LLAMAFILE=OFF`).
+  - `com.microsoft.onnxruntime:onnxruntime-android:1.20.0` runs embedded `Silero VAD v6`, `Parakeet TDT INT8` STT (`org.schabi.parakeetype.*`), and `Supertonic` TTS (`com.brahmadeo.supertonic.tts.*`).
+  - `com.google.ai.edge.litert:litert:2.3.0` + `litert-gpu:2.3.0` + `litertlm-android:0.18.0` validate `TFL3` v3 FlatBuffer headers and probe GPU with cached 4-thread CPU fallback.
+
+## Build & Test
 
 ```bash
-# from the repository root: builds webui/ and stages index.html + the split
-# PGlite runtime into app/src/main/assets (identical to what CI runs)
-./scripts/stage-web.sh
+# Ensure llama.cpp sources are present at app/src/main/cpp/llama.cpp
+git clone --depth 1 https://github.com/ggml-org/llama.cpp.git \
+  app/src/main/cpp/llama.cpp
 
-cd public/android/HeretIc
-./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug   # verifyWebAssets fails fast if staging was skipped
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Run unit tests and assemble the ARM64 APK
+gradle :app:testDebugUnitTest :app:assembleDebug
 ```
-
-## Bridge contract
-
-The WebView exposes `window.HereticNative`:
-
-```ts
-reply(prompt: string): string            // JSON CoreReply
-analyzeError(rawLog: string): string     // JSON WHAT/WHY/REQUEST SOLUTION
-confirmSolution(pasteBack: string): string
-assessFile(fileName: string): string
-speak(text: string): void
-triggerMic(): void
-triggerFilePicker(): void
-voiceStatus(): string                   // JSON: offline speech packs + TTS voice data
-modelStatus(): string                   // JSON: ABI, RAM, .litertlm catalog
-triggerModelPicker(): void              // ACTION_OPEN_DOCUMENT -> filesDir/models
-isArm64Device(): boolean
-deviceRamMb(): number
-```
-
-Native → web events: `heretic-stt`, `heretic-stt-error`, `heretic-file-picked`,
-`heretic-model`, `heretic-model-progress`, `heretic-model-error`.
-
-## Safeguards
-
-* No `INTERNET` permission is declared — the APK cannot reach a network.
-* No `<service>`, no `<receiver>`, no WorkManager: zero background drain.
-* `RECORD_AUDIO` is requested only when the mic is tapped, and every decision is
-  written to the hash-chained authorization ledger.
-* Files arrive through `ACTION_OPEN_DOCUMENT`; exactly one URI grant, never a
-  directory. `allowFileAccess = false` in the WebView, which is why the page is served
-  from `https://appassets.androidplatform.net/assets/` through `WebViewAssetLoader`.
-* `.litertlm` weights are streamed into `filesDir/models/` (`.part` file, free-space
-  check, truncation check) and never packaged into the APK.
-* `litertlm-android` 0.18.0 ships `arm64-v8a`/`x86_64` only; `isArm64Device()` refuses
-  other ABIs before the native library loads.

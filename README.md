@@ -14,9 +14,9 @@ Most mobile assistants stream raw microphone audio to remote servers or wrap a C
 | **Zero WebUI / zero browser chrome** | Deleted `WebView`, `WebBridge`, `index.html`, and PGlite web runtime; enforced by Gradle `verifyVoiceAssets` + CI APK inspection | Pure Jetpack Compose Material 3 Dark UI (`MainActivity` → `HereticApp`), `83.07 MiB` `arm64-v8a` APK |
 | **Instant cold-boot voice & modular neural upgrades** | Built-in `Silero VAD v6` (`assets/silero_vad.onnx`) + `HereticCore` + offline Android speech fallback on first boot; hot-upgrades per slot when neural packs are imported | Works immediately upon install; upgrades STT, Brain, and TTS independently without rebuilding |
 | **True in-process neural voice pipeline** | `Parakeet TDT INT8` ONNX STT + `llama.cpp` JNI (`libllama_jni.so` + `ggml`) + `LiteRT-LM 0.18.0` / `LiteRT 2.3.0` + `Supertonic ONNX TTS` | Sentence-streamed token → PCM synthesis into a low-latency `USAGE_ASSISTANT` `AudioTrack` |
-| **Sub-millisecond `"shaz"` & VAD barge-in** | Continuous Silero VAD speech monitor + keyword interceptor wired directly to `PcmStreamingAudioPlayer`, `LlamaCppEngine`, and `SupertonicTTS` | Saying `"shaz"` or speaking over playback immediately calls `pause()` + `flush()` and cancels active inference |
+| **Wake word `"HERETIC"` & `"shaz"` barge-in** | `WakeWordDetector` + `WakeWordSessionGate` (`"Heretic"` / `"Hey Heretic"`) gate continuous hands-free capture with a `20s` active follow-up window, while `"shaz"` + Silero VAD v6 bypass standby to cut playback instantly | Ambient room chatter is ignored until `"Heretic"` is spoken; `"shaz"` or live speech during playback immediately executes `pause()` + `flush()` |
 | **Hardware-resilient LiteRT 2.3.0 inference** | `LiteRtEngine` + `LiteRtLmEngine` verify `TFL3` v3 FlatBuffer headers upfront, wrap GPU delegate init in `runCatching`, fall back to `4` CPU threads (`setNumThreads(4)`), and cache the resolved backend per install | Emulators and Mali drivers without OpenCL/Vulkan degrade cleanly on the first probe and skip broken GPU probes thereafter |
-| **Auditable engineering workflows by voice or touch** | `VoiceActionRouter` + `ErrorEngine` + `FileAssessor` + `RepoAssessor` + `AuthorizationGate` + `DecisionLogger` (`ADR-009`..`ADR-013`) | 35/35 JVM unit tests passing on every push; tamper-evident SHA-256 gate chain and `decisions.jsonl` ADR log |
+| **Auditable engineering workflows by voice or touch** | `VoiceActionRouter` + `ErrorEngine` + `FileAssessor` + `RepoAssessor` + `AuthorizationGate` + `DecisionLogger` (`ADR-009`..`ADR-013`) | 37/37 JVM unit tests passing on every push; tamper-evident SHA-256 gate chain and `decisions.jsonl` ADR log |
 
 ---
 
@@ -35,7 +35,10 @@ Most mobile assistants stream raw microphone audio to remote servers or wrap a C
    ├─ [Slot 2 Imported] Parakeet TDT Ultra INT8 (encoder / decoder / joiner / nemo128 ONNX)
    └─ [Default Fallback] Android On-Device SpeechRecognizer (EXTRA_PREFER_OFFLINE = true)
        │
-       ├──► Keyword == "shaz" ──► Emergency Halt (LLM + ONNX TTS + AudioTrack flush)
+       ├──► Interrupt Word == "shaz" ──► Emergency Halt (bypasses wake gate; LLM + ONNX TTS + AudioTrack flush)
+       ├──► Wake Gate (`WakeWordDetector` / `WakeWordSessionGate`)
+       │      ├─ Wake Word == "Heretic" ("Hey Heretic", "Heretic, <command>") ──► Opens 20s hands-free command window & strips prefix
+       │      └─ Unprefixed ambient room speech (outside 20s window)          ──► Ignored in hands-free standby
        ▼
  VoiceActionRouter & Multi-Tier Brain
    ├─ Deterministic Commands ──► Error Loop · File Assessor · Repo Milestones · SHA-256 Gates · ADRs · .wav Export
@@ -61,7 +64,7 @@ Most mobile assistants stream raw microphone audio to remote servers or wrap a C
 
 `Heretic` boots directly into a six-tab native Jetpack Compose Material 3 Dark interface (`ai.heretic.app.ui.HereticApp`):
 
-1. **Assistant** — Live conversation stream, active tier chips (`STT`, `Brain`, `TTS`), **Hands-Free / Push-to-Talk Mic**, **`SHAZ · Flush`** emergency interrupt button, quick-execution chips, and per-turn `▶ Speak` replay.
+1. **Assistant** — Live conversation stream, interactive **`Wake: "HERETIC"`** standby/open-mic chip alongside active tier chips (`STT`, `Brain`, `TTS`), **Hands-Free / Push-to-Talk Mic**, **`SHAZ · Flush`** emergency interrupt button, quick-execution chips, and per-turn `▶ Speak` replay.
 2. **Models** — Independent Android 16 Scoped Storage (SAF) importers for:
    - **Slot 1 (Brain):** `.gguf` (`llama.cpp` JNI), `.litertlm` (`LiteRT-LM 0.18.0`), and `.tflite` / `.task` (`LiteRT 2.3.0` + `litert-gpu 2.3.0`, with a one-tap **Reset Cached LiteRT GPU/CPU Backend Probe** control).
    - **Slot 2 (STT):** `parakeet-tdt-stt-models.zip` or folder picker + live **16 kHz Microphone SNR & Fricative Calibration**.
@@ -100,15 +103,15 @@ Heretic/
 │       ├── main/cpp/                # llama_jni.cpp + CMakeLists.txt (links llama + ggml)
 │       ├── main/java/
 │       │   ├── ai/heretic/app/      # Compose UI, HereticCore, ErrorEngine, Gates, ADRs, LiteRT
-│       │   ├── com/heretic/voice/   # LlamaCppEngine, Orchestrator, AudioTrack, SAF Store
+│       │   ├── com/heretic/voice/   # WakeWordDetector, LlamaCppEngine, Orchestrator, AudioTrack, SAF Store
 │       │   ├── org/schabi/parakeetype/    # Parakeet TDT ONNX STT, Silero VAD v6, MicScorer
 │       │   └── com/brahmadeo/supertonic/  # Supertonic ONNX TTS, LexiconManager, WavUtils
-│       └── test/java/               # 35 JVM unit tests (core, LiteRT, voice pipeline, ADRs)
+│       └── test/java/               # 37 JVM unit tests (wake word, core, LiteRT, voice pipeline, ADRs)
 ├── scripts/
 │   ├── fetch-supertonic-tts.sh      # Fetches & schema-validates Supertonic ONNX TTS assets
 │   └── package-voice-models.sh      # Reproducibly builds & SHA-256 verifies all 3 model packs
 └── .github/workflows/
-    ├── android.yml                  # Runs 35 unit tests, builds & verifies pure-native ARM64 APK
+    ├── android.yml                  # Runs 37 unit tests, builds & verifies pure-native ARM64 APK
     ├── fetch-voice-models.yml       # On-demand / push Supertonic TTS bundle verification
     └── package-voice-models.yml     # Publishes voice-models-v1 release bundles
 ```
@@ -124,7 +127,7 @@ Prerequisites: **JDK 17**, **Android SDK (`compileSdk 36`)**, **NDK `27.2.124790
 git clone --depth 1 https://github.com/ggml-org/llama.cpp.git \
   public/android/HeretIc/app/src/main/cpp/llama.cpp
 
-# 2. Run the 35 JVM unit tests and assemble the native ARM64 APK
+# 2. Run the 37 JVM unit tests and assemble the native ARM64 APK
 cd public/android/HeretIc
 gradle :app:testDebugUnitTest :app:assembleDebug
 

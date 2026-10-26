@@ -14,6 +14,8 @@ import ai.heretic.app.core.RepoEvaluation
 import ai.heretic.app.core.SolutionConfirmation
 
 enum class AssistantActionKind {
+    WAKE_ACKNOWLEDGED,
+    WAKE_GATE_UPDATED,
     STOP_PLAYBACK,
     ERROR_ANALYZED,
     SOLUTION_CONFIRMED,
@@ -71,11 +73,13 @@ object VoiceActionRouter {
         onSaveLastWav: () -> Result<String>,
         onAddLexiconRule: (String, String) -> Unit,
         systemSummaryProvider: () -> Pair<String, String>,
+        wakeWordRequiredProvider: () -> Boolean = { true },
+        onSetWakeWordRequired: (Boolean) -> Unit = {},
     ): RoutedAssistantResult? {
-        val trimmed = rawInput.trim()
-        if (trimmed.isEmpty()) return null
+        val rawTrimmed = rawInput.trim()
+        if (rawTrimmed.isEmpty()) return null
 
-        if (isImmediateStop(trimmed)) {
+        if (isImmediateStop(rawTrimmed)) {
             return RoutedAssistantResult(
                 kind = AssistantActionKind.STOP_PLAYBACK,
                 displayReply = "Playback halted immediately and audio buffers flushed.",
@@ -83,7 +87,70 @@ object VoiceActionRouter {
             )
         }
 
+        val wakeParsed = com.heretic.voice.WakeWordDetector.parse(rawTrimmed)
+        val trimmed = when (wakeParsed) {
+            com.heretic.voice.WakeWordDetector.ParseResult.ImmediateStop -> {
+                return RoutedAssistantResult(
+                    kind = AssistantActionKind.STOP_PLAYBACK,
+                    displayReply = "Playback halted immediately and audio buffers flushed.",
+                    spokenReply = "",
+                )
+            }
+            com.heretic.voice.WakeWordDetector.ParseResult.WakeOnly -> {
+                return RoutedAssistantResult(
+                    kind = AssistantActionKind.WAKE_ACKNOWLEDGED,
+                    displayReply = "HERETIC AWAKE · Hands-free command window open (20s). Speak your command, or say \"shaz\" anytime to interrupt.",
+                    spokenReply = "Heretic awake and listening. Go ahead.",
+                )
+            }
+            is com.heretic.voice.WakeWordDetector.ParseResult.WokeWithCommand -> wakeParsed.command
+            is com.heretic.voice.WakeWordDetector.ParseResult.Unprefixed -> wakeParsed.text
+        }
+
         val lower = trimmed.lowercase()
+
+        // 0. Wake-word inspection & toggle commands
+        if (lower == "wake word" ||
+            lower == "what is the wake word" ||
+            lower == "what's the wake word" ||
+            lower == "whats the wake word" ||
+            lower == "what is your wake word"
+        ) {
+            val gateMode = if (wakeWordRequiredProvider()) "ON (hands-free waits for \"Heretic\")" else "OPEN MIC (all speech accepted)"
+            return RoutedAssistantResult(
+                kind = AssistantActionKind.WAKE_GATE_UPDATED,
+                displayReply = "WAKE WORD      -> \"Heretic\" (or \"Hey Heretic\", e.g. \"Heretic, system status\")\n" +
+                    "INTERRUPT WORD -> \"shaz\" (instant AudioTrack pause + flush)\n" +
+                    "HANDS-FREE GATE -> $gateMode",
+                spokenReply = "My wake word is Heretic, and my instant stop word is shaz.",
+            )
+        }
+
+        if (lower == "enable wake word" ||
+            lower == "require wake word" ||
+            lower == "wake word on" ||
+            lower == "wake gate on"
+        ) {
+            onSetWakeWordRequired(true)
+            return RoutedAssistantResult(
+                kind = AssistantActionKind.WAKE_GATE_UPDATED,
+                displayReply = "Hands-free Wake Gate ENABLED -> Say \"Heretic\" (or \"Hey Heretic <command>\") to trigger hands-free actions.",
+                spokenReply = "Wake word gate enabled. Say Heretic before hands-free commands.",
+            )
+        }
+
+        if (lower == "disable wake word" ||
+            lower == "wake word off" ||
+            lower == "wake gate off" ||
+            lower == "open mic mode"
+        ) {
+            onSetWakeWordRequired(false)
+            return RoutedAssistantResult(
+                kind = AssistantActionKind.WAKE_GATE_UPDATED,
+                displayReply = "Hands-free Wake Gate DISABLED -> Open-mic continuous listening active (say \"shaz\" anytime to halt playback).",
+                spokenReply = "Open mic mode enabled.",
+            )
+        }
 
         // 1. Raw stack trace or explicit "analyze error ..." command
         val looksLikeRawStackTrace = trimmed.contains("FATAL EXCEPTION") ||
@@ -386,7 +453,8 @@ object VoiceActionRouter {
         if (lower == "help" || lower == "commands" || lower == "what can you do" || lower == "list capabilities") {
             val display = buildString {
                 appendLine("HERETIC NATIVE VOICE ASSISTANT — ACTIVE COMMANDS:")
-                appendLine("• Voice & Barge-In: Speak naturally or say \"shaz\" / \"stop\" to immediately pause & flush AudioTrack.")
+                appendLine("• Wake Word: Say \"Heretic\" or \"Hey Heretic <command>\" in hands-free mode.")
+                appendLine("• Interrupt / Barge-In: Say \"shaz\" or \"stop\" to immediately pause & flush AudioTrack.")
                 appendLine("• Error Loop: \"analyze error <logcat>\" and \"confirm solution <paste-back>\"")
                 appendLine("• File Assessor: \"assess file <name.gguf | .litertlm | .onnx | .zip>\"")
                 appendLine("• Repo Milestones: \"repo progress\", \"complete milestone <name>\", \"add milestone <title>\"")
@@ -397,7 +465,7 @@ object VoiceActionRouter {
             return RoutedAssistantResult(
                 kind = AssistantActionKind.CAPABILITIES,
                 displayReply = display,
-                spokenReply = "Seven offline workflows are ready: conversational AI, error analysis, file assessment, milestone tracking, SHA 256 authorization gates, architecture decision logging, and neural voice synthesis. Say shaz anytime to interrupt playback.",
+                spokenReply = "Say Heretic to wake hands-free listening, or say shaz anytime to interrupt playback. Seven offline workflows are ready: conversational AI, error analysis, file assessment, milestone tracking, SHA 256 authorization gates, architecture decision logging, and neural voice synthesis.",
             )
         }
 

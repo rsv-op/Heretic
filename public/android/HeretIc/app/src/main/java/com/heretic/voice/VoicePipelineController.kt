@@ -56,6 +56,7 @@ data class VoicePipelineUiState(
     val liteRtModelLabel: String = "",
     val tfliteSummary: String = "LiteRT 2.3.0 + litert-gpu 2.3.0 ready (TFL3 v3 · GPU -> setNumThreads(4) cached per install)",
     val ttsNeuralActive: Boolean = false,
+    val wakeWordRequired: Boolean = true,
     val isListening: Boolean = false,
     val isPlaying: Boolean = false,
     val voiceSpeed: Float = 1.05f,
@@ -92,6 +93,9 @@ data class VoicePipelineUiState(
         } else {
             "Android Offline TTS"
         }
+
+    val activeWakeLabel: String
+        get() = if (wakeWordRequired) "Wake: \"HERETIC\"" else "Wake: Open Mic"
 }
 
 /**
@@ -118,6 +122,7 @@ class VoicePipelineController(
         private const val KEY_MILESTONES = "repo_milestones_json"
         private const val KEY_VOICE_SPEED = "voice_speed"
         private const val KEY_DIFFUSION_STEPS = "diffusion_steps"
+        private const val KEY_WAKE_WORD_REQUIRED = "wake_word_required"
         private const val KEY_INITIAL_TTS_GATE = "initial_tts_gate_seeded"
     }
 
@@ -125,6 +130,7 @@ class VoicePipelineController(
     private val hereticCore = core ?: HereticCore(appContext)
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private val controllerLock = Any()
+    private val wakeGate: WakeWordSessionGate
     private var turnSeq = 1L
 
     private var orchestrator: UnifiedVoiceOrchestrator? = null
@@ -140,6 +146,8 @@ class VoicePipelineController(
         val prefs = appContext.getSharedPreferences(PREFS_ASSISTANT, Context.MODE_PRIVATE)
         val savedSpeed = prefs.getFloat(KEY_VOICE_SPEED, 1.05f).coerceIn(0.8f, 1.4f)
         val savedSteps = prefs.getInt(KEY_DIFFUSION_STEPS, 5).coerceIn(2, 8)
+        val savedWakeRequired = prefs.getBoolean(KEY_WAKE_WORD_REQUIRED, true)
+        wakeGate = WakeWordSessionGate(wakeWordRequired = savedWakeRequired)
         val loadedLexicon = LexiconManager.load(appContext)
         val loadedMilestones = loadPersistedMilestones()
         val styles = discoverAllStyles(File(initialPaths.ttsModelDir))
@@ -149,7 +157,7 @@ class VoicePipelineController(
             role = "heretic",
             badge = "HERETIC READY",
             text = "Heretic Voice Assistant online (100% offline, zero network permissions). " +
-                "Tap the Mic button to speak, say \"shaz\" anytime to interrupt playback, or open Models to activate Parakeet STT, llama.cpp GGUF, LiteRT-LM, and Supertonic TTS.",
+                "Say \"Heretic\" (or \"Hey Heretic <command>\") in hands-free mode, say \"shaz\" anytime to interrupt playback, or open Models to activate Parakeet STT, llama.cpp GGUF, LiteRT-LM, and Supertonic TTS.",
             spokenText = "Heretic Voice Assistant online.",
         )
 
@@ -159,6 +167,7 @@ class VoicePipelineController(
                 readiness = initialReadiness,
                 tfliteSummary = tfliteEngine?.statusSummary()
                     ?: "LiteRT 2.3.0 + litert-gpu 2.3.0 ready (TFL3 v3 · GPU -> setNumThreads(4) cached per install)",
+                wakeWordRequired = savedWakeRequired,
                 voiceSpeed = savedSpeed,
                 diffusionSteps = savedSteps,
                 availableStyles = styles,
@@ -725,7 +734,7 @@ class VoicePipelineController(
         if (active != null && active.sttLoaded) {
             active.startHandsFreeCapture(
                 onUtterance = { transcript ->
-                    handleSpokenOrTypedTurn(transcript, fromMic = true)
+                    handleSpokenOrTypedTurn(transcript, fromMic = true, fromHandsFreeStream = true)
                 },
                 onBargeIn = {
                     platformVoice?.stop()
@@ -736,9 +745,14 @@ class VoicePipelineController(
                 },
             )
             mutateState {
+                val modeHint = if (it.wakeWordRequired) {
+                    "say \"Heretic\" to wake, or \"shaz\" to stop"
+                } else {
+                    "open mic active · say \"shaz\" anytime to stop"
+                }
                 it.copy(
                     isListening = true,
-                    statusMessage = "Hands-free Parakeet TDT + Silero VAD v6 listening (say \"shaz\" anytime to stop).",
+                    statusMessage = "Hands-free Parakeet TDT + Silero VAD v6 listening ($modeHint).",
                 )
             }
             return true
@@ -827,6 +841,31 @@ class VoicePipelineController(
         }
     }
 
+    fun setWakeWordRequired(required: Boolean) {
+        wakeGate.wakeWordRequired = required
+        if (!required) {
+            wakeGate.sleep()
+        }
+        appContext.getSharedPreferences(PREFS_ASSISTANT, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_WAKE_WORD_REQUIRED, required)
+            .apply()
+        mutateState {
+            it.copy(
+                wakeWordRequired = required,
+                statusMessage = if (required) {
+                    "Wake Gate ON — Hands-free listening waits for wake word \"Heretic\" (say \"shaz\" anytime to interrupt)."
+                } else {
+                    "Wake Gate OFF — Hands-free open-mic listening active (say \"shaz\" anytime to interrupt)."
+                },
+            )
+        }
+    }
+
+    fun toggleWakeWordRequired() {
+        setWakeWordRequired(!_state.value.wakeWordRequired)
+    }
+
     fun clearConversation() {
         mutateState {
             it.copy(
@@ -837,18 +876,64 @@ class VoicePipelineController(
         }
     }
 
-    private fun handleSpokenOrTypedTurn(rawInput: String, fromMic: Boolean) {
-        val trimmed = rawInput.trim()
-        if (trimmed.isEmpty()) return
+    private fun handleSpokenOrTypedTurn(
+        rawInput: String,
+        fromMic: Boolean,
+        fromHandsFreeStream: Boolean = false,
+    ) {
+        val rawTrimmed = rawInput.trim()
+        if (rawTrimmed.isEmpty()) return
 
-        if (VoiceActionRouter.isImmediateStop(trimmed)) {
-            stopPlayback()
-            appendTurn("you", if (fromMic) "MIC" else "YOU", trimmed)
-            appendTurn("action", "SHAZ INTERRUPT", "Playback halted and AudioTrack flushed immediately.")
-            return
+        val gateDecision = wakeGate.evaluate(
+            rawTranscript = rawTrimmed,
+            fromHandsFreeStream = fromHandsFreeStream,
+        )
+
+        val trimmed = when (gateDecision) {
+            WakeGateDecision.IgnoredAmbient -> {
+                mutateState {
+                    it.copy(
+                        statusMessage = "Standby (Wake Word \"Heretic\") · Ignored unprefixed room speech.",
+                    )
+                }
+                return
+            }
+
+            WakeGateDecision.ImmediateStop -> {
+                stopPlayback()
+                appendTurn("you", if (fromMic) "MIC" else "YOU", rawTrimmed)
+                appendTurn("action", "SHAZ INTERRUPT", "Playback halted and AudioTrack flushed immediately.")
+                return
+            }
+
+            WakeGateDecision.WakeAcknowledged -> {
+                val ackText = "HERETIC AWAKE · Hands-free command window open (20s). Speak your command, or say \"shaz\" anytime to interrupt."
+                val ackSpeak = "Heretic awake and listening. Go ahead."
+                appendTurn("you", if (fromMic) "WAKE WORD" else "YOU", rawTrimmed)
+                appendTurn("action", "WAKE · HERETIC", ackText, spoken = ackSpeak)
+                mutateState {
+                    it.copy(
+                        lastAssistantSentence = ackSpeak,
+                        statusMessage = "Wake word \"Heretic\" detected — listening for follow-up command (20s window)...",
+                    )
+                }
+                speakTextAloud(ackSpeak)
+                return
+            }
+
+            is WakeGateDecision.Execute -> {
+                appendTurn(
+                    role = "you",
+                    badge = when {
+                        gateDecision.wokeNow && fromMic -> "WAKE · HERETIC"
+                        fromMic -> "VOICE"
+                        else -> "YOU"
+                    },
+                    text = rawTrimmed,
+                )
+                gateDecision.command
+            }
         }
-
-        appendTurn("you", if (fromMic) "VOICE" else "YOU", trimmed)
 
         val routed: RoutedAssistantResult? = VoiceActionRouter.tryExecuteCommand(
             rawInput = trimmed,
@@ -858,6 +943,8 @@ class VoicePipelineController(
             onSaveLastWav = { saveLastSynthesizedWav() },
             onAddLexiconRule = { word, rep -> addLexiconRule(word, rep) },
             systemSummaryProvider = { buildSystemDiagnosticReport() },
+            wakeWordRequiredProvider = { _state.value.wakeWordRequired },
+            onSetWakeWordRequired = { setWakeWordRequired(it) },
         )
 
         if (routed != null) {
@@ -988,6 +1075,7 @@ class VoicePipelineController(
         val display = buildString {
             appendLine("DEVICE -> ${Build.MANUFACTURER} ${Build.MODEL} · Android API ${Build.VERSION.SDK_INT} ($abi)")
             appendLine("MEMORY -> ${ramMb} MB RAM · ${freeMb} MB free internal storage")
+            appendLine("WAKE / STOP  -> Wake word = \"Heretic\" (gate=${if (snap.wakeWordRequired) "ON" else "OPEN MIC"}) · Interrupt = \"shaz\"")
             appendLine("ACTIVE STT   -> ${snap.activeSttLabel}")
             appendLine("ACTIVE BRAIN -> ${snap.activeBrainLabel}")
             appendLine("ACTIVE TTS   -> ${snap.activeTtsLabel}")
@@ -997,6 +1085,7 @@ class VoicePipelineController(
             append("GATE LEDGER  -> ${if (brokenIdx == -1) "SHA-256 chain intact" else "Broken at $brokenIdx"}")
         }
         val spoken = "Running on ${Build.MODEL}, ABI $abi, with $freeMb megabytes free storage. " +
+            "Wake word is Heretic, interrupt word is shaz. " +
             "Active speech engine is ${snap.activeSttLabel}, brain is ${snap.activeBrainLabel}, and voice output is ${snap.activeTtsLabel}. " +
             "Internet permission is physically absent."
         return display to spoken
@@ -1028,6 +1117,9 @@ class VoicePipelineController(
             put("ttsMessage", snap.readiness.ttsMessage)
             put("isBusy", snap.isBusy)
             put("isInitialized", snap.isInitialized)
+            put("wakeWord", WakeWordDetector.WAKE_KEYWORD)
+            put("stopWord", WakeWordDetector.STOP_KEYWORD)
+            put("wakeWordRequired", snap.wakeWordRequired)
             put("isListening", snap.isListening)
             put("isPlaying", snap.isPlaying)
             put("statusMessage", snap.statusMessage)
